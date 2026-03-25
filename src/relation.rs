@@ -1339,16 +1339,18 @@ fn log_ext_degrees<SC: StarkGenericConfig>(log_degrees: &[usize], config: &SC) -
 mod multiplicity_tests {
     use super::generate_trace_rows_with_linear;
     use crate::{
-        poseidon2::{BabyBearPoseidon2Backend, BabyBearPoseidon2_16HashAir, POSEIDON2_16_WIDTH},
+        poseidon2::{
+            BabyBearPoseidon2Backend, BabyBearPoseidon2_16, BabyBearPoseidon2_16HashAir,
+            POSEIDON2_16_WIDTH,
+        },
         relation, RelationField,
     };
     use p3_field::PrimeCharacteristicRing;
     use p3_matrix::Matrix;
     use spongefish_circuit::permutation::{PermutationInstanceBuilder, PermutationWitnessBuilder};
-    use spongefish_poseidon2::BabyBearPoseidon2_16;
 
     #[test]
-    fn repeated_witness_rows_share_one_hash_trace() {
+    fn repeated_allocations_share_one_hash_trace() {
         type B = BabyBearPoseidon2Backend;
 
         let hash = BabyBearPoseidon2_16HashAir::default();
@@ -1356,9 +1358,9 @@ mod multiplicity_tests {
         let instance = PermutationInstanceBuilder::<RelationField<B>, POSEIDON2_16_WIDTH>::new();
         let witness = PermutationWitnessBuilder::<_, POSEIDON2_16_WIDTH>::new(permutation);
         let input = core::array::from_fn(|idx| RelationField::<B>::from_usize(idx + 1));
+        let input_vars = instance.allocator().allocate_vars::<POSEIDON2_16_WIDTH>();
 
         for _ in 0..2 {
-            let input_vars = instance.allocator().allocate_vars::<POSEIDON2_16_WIDTH>();
             let _ = instance.allocate_permutation(&input_vars);
             let _ = witness.allocate_permutation(&input);
         }
@@ -1369,7 +1371,7 @@ mod multiplicity_tests {
             );
 
         assert_eq!(traces[0].height(), 1);
-        assert_eq!(traces[2].height(), 2);
+        assert_eq!(traces[2].height(), 1);
 
         let backend = B::default();
         let proof =

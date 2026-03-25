@@ -852,7 +852,6 @@ dependencies = [
 [[package]]
 name = "spongefish"
 version = "1.0.0-rc1"
-source = "git+https://github.com/arkworks-rs/spongefish#921b0b75589e6f64ef71dab09c336ba78e4180a6"
 dependencies = [
  "digest",
  "p3-baby-bear",
@@ -868,35 +867,20 @@ dependencies = [
 [[package]]
 name = "spongefish-circuit"
 version = "1.0.0-rc1"
-source = "git+https://github.com/arkworks-rs/spongefish#921b0b75589e6f64ef71dab09c336ba78e4180a6"
 dependencies = [
  "p3-baby-bear",
  "p3-field",
  "spin 0.9.8",
  "spongefish",
- "spongefish-poseidon2",
 ]
 
 [[package]]
 name = "spongefish-derive"
 version = "1.0.0-rc1"
-source = "git+https://github.com/arkworks-rs/spongefish#921b0b75589e6f64ef71dab09c336ba78e4180a6"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "spongefish-poseidon2"
-version = "1.0.0-rc1"
-source = "git+https://github.com/arkworks-rs/spongefish#921b0b75589e6f64ef71dab09c336ba78e4180a6"
-dependencies = [
- "p3-baby-bear",
- "p3-koala-bear",
- "p3-poseidon2",
- "p3-symmetric",
- "spongefish",
 ]
 
 [[package]]
@@ -925,7 +909,6 @@ dependencies = [
  "rand 0.10.0",
  "spongefish",
  "spongefish-circuit",
- "spongefish-poseidon2",
 ]
 
 [[package]]

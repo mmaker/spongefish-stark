@@ -10,11 +10,15 @@ use p3_uni_stark::{StarkGenericConfig, Val};
 #[cfg(feature = "keccak")]
 pub mod keccak;
 pub mod poseidon2;
+pub mod preimage_air;
+pub mod preimage_relation;
 pub mod relation;
 
 #[cfg(test)]
 mod tests;
 
+pub use preimage_air::HashPreimageAir;
+pub use preimage_relation::{build_instance_and_witness, PreimageStatement};
 pub use spongefish_circuit::permutation::QueryAnswerPair;
 
 pub type RelationField<B> = Val<<B as StarkRelationBackend>::Config>;

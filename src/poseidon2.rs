@@ -30,6 +30,68 @@ pub const BABYBEAR_POSEIDON2_SBOX_REGISTERS: usize = 1;
 
 pub const KOALABEAR_POSEIDON2_SBOX_REGISTERS: usize = 0;
 
+#[derive(Clone)]
+pub struct BabyBearPoseidon2_16(Poseidon2BabyBear<POSEIDON2_16_WIDTH>);
+
+impl From<Poseidon2BabyBear<POSEIDON2_16_WIDTH>> for BabyBearPoseidon2_16 {
+    fn from(inner: Poseidon2BabyBear<POSEIDON2_16_WIDTH>) -> Self {
+        Self(inner)
+    }
+}
+
+impl Default for BabyBearPoseidon2_16 {
+    fn default() -> Self {
+        Self(default_babybear_poseidon2_16())
+    }
+}
+
+impl spongefish::Permutation<POSEIDON2_16_WIDTH> for BabyBearPoseidon2_16
+where
+    Poseidon2BabyBear<POSEIDON2_16_WIDTH>:
+        p3_symmetric::Permutation<[BabyBear; POSEIDON2_16_WIDTH]>,
+{
+    type U = BabyBear;
+
+    fn permute(&self, state: &[Self::U; POSEIDON2_16_WIDTH]) -> [Self::U; POSEIDON2_16_WIDTH] {
+        p3_symmetric::Permutation::permute(&self.0, *state)
+    }
+
+    fn permute_mut(&self, state: &mut [Self::U; POSEIDON2_16_WIDTH]) {
+        p3_symmetric::Permutation::permute_mut(&self.0, state);
+    }
+}
+
+#[derive(Clone)]
+pub struct KoalaBearPoseidon2_16(Poseidon2KoalaBear<POSEIDON2_16_WIDTH>);
+
+impl From<Poseidon2KoalaBear<POSEIDON2_16_WIDTH>> for KoalaBearPoseidon2_16 {
+    fn from(inner: Poseidon2KoalaBear<POSEIDON2_16_WIDTH>) -> Self {
+        Self(inner)
+    }
+}
+
+impl Default for KoalaBearPoseidon2_16 {
+    fn default() -> Self {
+        Self(default_koalabear_poseidon2_16())
+    }
+}
+
+impl spongefish::Permutation<POSEIDON2_16_WIDTH> for KoalaBearPoseidon2_16
+where
+    Poseidon2KoalaBear<POSEIDON2_16_WIDTH>:
+        p3_symmetric::Permutation<[KoalaBear; POSEIDON2_16_WIDTH]>,
+{
+    type U = KoalaBear;
+
+    fn permute(&self, state: &[Self::U; POSEIDON2_16_WIDTH]) -> [Self::U; POSEIDON2_16_WIDTH] {
+        p3_symmetric::Permutation::permute(&self.0, *state)
+    }
+
+    fn permute_mut(&self, state: &mut [Self::U; POSEIDON2_16_WIDTH]) {
+        p3_symmetric::Permutation::permute_mut(&self.0, state);
+    }
+}
+
 type Poseidon2_16Air<
     F,
     LinearLayers,
