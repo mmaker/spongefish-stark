@@ -1,7 +1,8 @@
 use crate::{
     poseidon2::{
-        BabyBearPoseidon2Backend, BabyBearPoseidon2_16HashAir, KoalaBearPoseidon2Backend,
-        KoalaBearPoseidon2_16HashAir, POSEIDON2_16_WIDTH,
+        BabyBearPoseidon2_16, BabyBearPoseidon2Backend, BabyBearPoseidon2_16HashAir,
+        KoalaBearPoseidon2_16, KoalaBearPoseidon2Backend, KoalaBearPoseidon2_16HashAir,
+        POSEIDON2_16_WIDTH,
     },
     relation, HashInvocationAir, RelationChallenge, RelationField, StarkRelationBackend,
 };
@@ -15,7 +16,6 @@ use spongefish_circuit::{
     allocator::FieldVar,
     permutation::{LinearEquation, PermutationInstanceBuilder, PermutationWitnessBuilder},
 };
-use spongefish_poseidon2::{BabyBearPoseidon2_16, KoalaBearPoseidon2_16};
 
 const TEST_LINEAR_WIDTH: usize = 1;
 

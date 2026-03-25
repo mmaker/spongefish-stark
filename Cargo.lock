@@ -893,7 +893,6 @@ version = "1.0.0-rc1"
 source = "git+https://github.com/arkworks-rs/spongefish#921b0b75589e6f64ef71dab09c336ba78e4180a6"
 dependencies = [
  "p3-baby-bear",
- "p3-koala-bear",
  "p3-poseidon2",
  "p3-symmetric",
  "spongefish",
@@ -925,7 +924,6 @@ dependencies = [
  "rand 0.10.0",
  "spongefish",
  "spongefish-circuit",
- "spongefish-poseidon2",
 ]
 
 [[package]]
