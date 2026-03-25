@@ -5,19 +5,16 @@ use core::{
 };
 
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PairBuilder, PermutationAirBuilder,
+    Air, AirBuilder, AirLayout, BaseAir, SymbolicAirBuilder, SymbolicExpressionExt, WindowAccess,
 };
-use p3_batch_stark::{BatchProof, CommonData, StarkInstance};
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
-use p3_lookup::{
-    logup::LogUpGadget,
-    lookup_traits::{AirLookupHandler, Direction, Kind, Lookup},
-};
+use p3_batch_stark::{BatchProof, ProverData, StarkInstance};
+use p3_field::{Algebra, BasedVectorSpace, Field, PrimeCharacteristicRing};
+use p3_lookup::{Direction, Kind, Lookup, LookupAir};
 use p3_matrix::{
     dense::{DenseMatrix, RowMajorMatrix},
     Matrix,
 };
-use p3_uni_stark::{StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression};
+use p3_uni_stark::StarkGenericConfig;
 use spongefish::{Permutation, Unit, VerificationError, VerificationResult};
 use spongefish_circuit::{
     allocator::FieldVar,
@@ -176,7 +173,6 @@ const fn num_linear_preprocessed_cols<const LIN_WIDTH: usize>() -> usize {
 
 #[derive(Clone)]
 struct HashLookupAir<H, F, const WIDTH: usize, const LIN_WIDTH: usize> {
-    lookup_count: usize,
     hash: H,
     builder: PermutationInstanceBuilder<F, WIDTH>,
     linear_constraints: Option<LinearConstraintsInstance<F>>,
@@ -184,14 +180,12 @@ struct HashLookupAir<H, F, const WIDTH: usize, const LIN_WIDTH: usize> {
 
 #[derive(Clone)]
 struct PublicVarLookupAir<F, const WIDTH: usize> {
-    lookup_count: usize,
     instance: PermutationInstanceBuilder<F, WIDTH>,
     trace_len: usize,
 }
 
 #[derive(Clone)]
 struct LinearConstraintsAir<F, const WIDTH: usize, const LIN_WIDTH: usize> {
-    lookup_count: usize,
     instance: PermutationInstanceBuilder<F, WIDTH>,
     constraints: LinearConstraintsInstance<F>,
     trace_len: usize,
@@ -211,7 +205,6 @@ impl<H, F, const WIDTH: usize, const LIN_WIDTH: usize> HashLookupAir<H, F, WIDTH
         linear_constraints: LinearConstraintsInstance<F>,
     ) -> Self {
         Self {
-            lookup_count: 0,
             hash,
             builder,
             linear_constraints: Some(linear_constraints),
@@ -223,7 +216,6 @@ impl<F, const WIDTH: usize> PublicVarLookupAir<F, WIDTH> {
     fn new(instance: PermutationInstanceBuilder<F, WIDTH>, trace_len: usize) -> Self {
         assert!(trace_len.is_power_of_two());
         Self {
-            lookup_count: 0,
             instance,
             trace_len,
         }
@@ -239,7 +231,6 @@ impl<F, const WIDTH: usize, const LIN_WIDTH: usize> LinearConstraintsAir<F, WIDT
         assert!(trace_len.is_power_of_two());
         assert!(constraints.as_ref().len() <= trace_len);
         Self {
-            lookup_count: 0,
             instance,
             constraints,
             trace_len,
@@ -258,7 +249,8 @@ where
     H: HashInvocationAir<RelationField<B>, WIDTH> + Sync,
     P: Permutation<WIDTH, U = RelationField<B>>,
     RelationField<B>: Field + Unit + PartialEq + Send + Sync,
-    SymbolicExpression<RelationChallenge<B>>: From<SymbolicExpression<RelationField<B>>>,
+    RelationChallenge<B>: BasedVectorSpace<RelationField<B>>,
+    SymbolicExpressionExt<RelationField<B>, RelationChallenge<B>>: Algebra<RelationChallenge<B>>,
 {
     let target_len = target_len_with_linear(instance);
     pad_witness_permutations(instance, witness, target_len);
@@ -273,11 +265,12 @@ where
     let log_degrees = trace_degree_bits(&traces, target_len);
     let config = backend.config(2024);
     let log_ext_degrees = log_ext_degrees(&log_degrees, &config);
-    let common = CommonData::from_airs_and_degrees(&config, &mut airs, &log_ext_degrees);
+    let prover_data = ProverData::from_airs_and_degrees(&config, &mut airs, &log_ext_degrees);
+    let common = &prover_data.common;
     let publics = vec![Vec::new(); airs.len()];
-    let instances = StarkInstance::new_multiple(&airs, &traces, &publics, &common);
-    let lookup_gadget = LogUpGadget::new();
-    let proof = p3_batch_stark::prove_batch(&config, &instances, &common, &lookup_gadget);
+    let trace_refs = traces.iter().collect::<Vec<_>>();
+    let instances = StarkInstance::new_multiple(&airs, &trace_refs, &publics, common);
+    let proof = p3_batch_stark::prove_batch(&config, &instances, &prover_data);
     postcard::to_allocvec(&proof).expect("proof serialization should succeed")
 }
 
@@ -292,7 +285,7 @@ where
     H: HashInvocationAir<RelationField<B>, WIDTH> + Sync,
     RelationField<B>: Field + Unit + PartialEq + Send + Sync,
     RelationChallenge<B>: BasedVectorSpace<RelationField<B>>,
-    SymbolicExpression<RelationChallenge<B>>: From<SymbolicExpression<RelationField<B>>>,
+    SymbolicExpressionExt<RelationField<B>, RelationChallenge<B>>: Algebra<RelationChallenge<B>>,
 {
     let linear_constraints = instance.linear_constraints();
     validate_linear_constraints::<LIN_WIDTH, _, _>(&linear_constraints, "instance");
@@ -325,10 +318,9 @@ where
             ),
         ),
     ];
-    let common = CommonData::from_airs_and_degrees(&config, &mut airs, &proof.degree_bits);
+    let prover_data = ProverData::from_airs_and_degrees(&config, &mut airs, &proof.degree_bits);
     let publics = vec![Vec::new(); airs.len()];
-    let lookup_gadget = LogUpGadget::new();
-    p3_batch_stark::verify_batch(&config, &airs, &proof, &publics, &common, &lookup_gadget)
+    p3_batch_stark::verify_batch(&config, &airs, &proof, &publics, &prover_data.common)
         .map_err(|_| VerificationError)
 }
 
@@ -556,81 +548,64 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let row = main.row_slice(0).expect("main row should exist");
-        let local: &LinearConstraintCols<_, LIN_WIDTH> = (*row).borrow();
+        let local: &LinearConstraintCols<_, LIN_WIDTH> = main.current_slice().borrow();
         let mut sum = AB::Expr::ZERO;
         for i in 0..LIN_WIDTH {
-            sum += local.linear_coefficients[i].clone() * local.linear_combination[i].clone();
+            sum += local.linear_coefficients[i] * local.linear_combination[i];
         }
-        builder.assert_eq(sum, local.image.clone());
+        builder.assert_eq(sum, local.image);
     }
 }
 
-impl<AB, H, F, const WIDTH: usize, const LIN_WIDTH: usize> AirLookupHandler<AB>
+impl<H, F, const WIDTH: usize, const LIN_WIDTH: usize> LookupAir<F>
     for GenericHashRelationAir<H, F, WIDTH, LIN_WIDTH>
 where
-    AB: PermutationAirBuilder<F = F> + PairBuilder + AirBuilderWithPublicValues,
     H: HashInvocationAir<F, WIDTH> + Sync,
     F: Field + Unit + PartialEq + Send + Sync,
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         match self {
             Self::Hash(air) => {
-                <HashLookupAir<H, F, WIDTH, LIN_WIDTH> as AirLookupHandler<AB>>::add_lookup_columns(
-                    air,
-                )
+                <HashLookupAir<H, F, WIDTH, LIN_WIDTH> as LookupAir<F>>::add_lookup_columns(air)
             }
             Self::Public(air) => {
-                <PublicVarLookupAir<F, WIDTH> as AirLookupHandler<AB>>::add_lookup_columns(air)
+                <PublicVarLookupAir<F, WIDTH> as LookupAir<F>>::add_lookup_columns(air)
             }
-            Self::Linear(air) => <LinearConstraintsAir<F, WIDTH, LIN_WIDTH> as AirLookupHandler<
-                AB,
-            >>::add_lookup_columns(air),
+            Self::Linear(air) => {
+                <LinearConstraintsAir<F, WIDTH, LIN_WIDTH> as LookupAir<F>>::add_lookup_columns(air)
+            }
         }
     }
 
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
         match self {
             Self::Hash(air) => {
-                <HashLookupAir<H, F, WIDTH, LIN_WIDTH> as AirLookupHandler<AB>>::get_lookups(air)
+                <HashLookupAir<H, F, WIDTH, LIN_WIDTH> as LookupAir<F>>::get_lookups(air)
             }
-            Self::Public(air) => {
-                <PublicVarLookupAir<F, WIDTH> as AirLookupHandler<AB>>::get_lookups(air)
+            Self::Public(air) => <PublicVarLookupAir<F, WIDTH> as LookupAir<F>>::get_lookups(air),
+            Self::Linear(air) => {
+                <LinearConstraintsAir<F, WIDTH, LIN_WIDTH> as LookupAir<F>>::get_lookups(air)
             }
-            Self::Linear(air) => <LinearConstraintsAir<F, WIDTH, LIN_WIDTH> as AirLookupHandler<
-                AB,
-            >>::get_lookups(air),
         }
     }
 }
 
-impl<AB, H, F, const WIDTH: usize, const LIN_WIDTH: usize> AirLookupHandler<AB>
+impl<H, F, const WIDTH: usize, const LIN_WIDTH: usize> LookupAir<F>
     for HashLookupAir<H, F, WIDTH, LIN_WIDTH>
 where
-    AB: PermutationAirBuilder<F = F> + PairBuilder + AirBuilderWithPublicValues,
     H: HashInvocationAir<F, WIDTH> + Sync,
     F: Field + Unit + PartialEq + Send + Sync,
 {
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        let idx = self.lookup_count;
-        self.lookup_count += 1;
-        vec![idx]
-    }
-
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        let symbolic = SymbolicAirBuilder::<AB::F, AB::EF>::new(
-            num_lookup_cols::<WIDTH>(),
-            BaseAir::<AB::F>::width(self),
-            0,
-            0,
-            0,
-        );
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
+        let symbolic = SymbolicAirBuilder::<F>::new(AirLayout {
+            preprocessed_width: num_lookup_cols::<WIDTH>(),
+            main_width: BaseAir::<F>::width(self),
+            ..Default::default()
+        });
         let main = symbolic.main();
         let row = main.row_slice(0).expect("symbolic row should exist");
-        let frame = self.hash.row_frame(&*row);
-        let invocation = self
-            .hash
-            .invocation::<SymbolicAirBuilder<AB::F, AB::EF>>(&frame);
+        let frame = self.hash.row_frame(&row);
+        let invocation = self.hash.invocation::<SymbolicAirBuilder<F>>(&frame);
         let preprocessed = symbolic.preprocessed();
         let lookup_row = preprocessed
             .row_slice(0)
@@ -641,129 +616,91 @@ where
         for i in 0..WIDTH {
             let input = invocation.input[i].clone();
             let output = invocation.output[i].clone();
-            let input_var = lookup_column.input_vars[i].clone();
-            let output_var = lookup_column.output_vars[i].clone();
-            let input_multiplicity = lookup_column.input_multiplicities[i].clone();
-            let output_multiplicity = lookup_column.output_multiplicities[i].clone();
-            let input_public = lookup_column.input_public[i].clone();
-            let output_public = lookup_column.output_public[i].clone();
-            let input_linear = lookup_column.input_linear_constraints[i].clone();
-            let output_linear = lookup_column.output_linear_constraints[i].clone();
+            let input_var = lookup_column.input_vars[i];
+            let output_var = lookup_column.output_vars[i];
+            let input_multiplicity = lookup_column.input_multiplicities[i];
+            let output_multiplicity = lookup_column.output_multiplicities[i];
+            let input_public = lookup_column.input_public[i];
+            let output_public = lookup_column.output_public[i];
+            let input_linear = lookup_column.input_linear_constraints[i];
+            let output_linear = lookup_column.output_linear_constraints[i];
 
-            lookups.push(AirLookupHandler::<AB>::register_lookup(
-                self,
+            lookups.push(Lookup::new(
                 Kind::Global(IO_LOOKUP_NAME.to_string()),
-                &[
-                    (
-                        vec![input_var.clone().into(), input.clone().into()],
-                        input_multiplicity.into(),
-                        Direction::Send,
-                    ),
-                    (
-                        vec![output_var.clone().into(), output.clone().into()],
-                        output_multiplicity.into(),
-                        Direction::Receive,
-                    ),
+                vec![
+                    vec![input_var.into(), input.clone()],
+                    vec![output_var.into(), output.clone()],
                 ],
+                vec![
+                    Direction::Send.multiplicity(input_multiplicity.into()),
+                    Direction::Receive.multiplicity(output_multiplicity.into()),
+                ],
+                vec![3 * i],
             ));
-            lookups.push(AirLookupHandler::<AB>::register_lookup(
-                self,
+            lookups.push(Lookup::new(
                 Kind::Global(PUB_LOOKUP_NAME.to_string()),
-                &[
-                    (
-                        vec![output_var.clone().into(), output.clone().into()],
-                        output_public.into(),
-                        Direction::Send,
-                    ),
-                    (
-                        vec![input_var.clone().into(), input.clone().into()],
-                        input_public.into(),
-                        Direction::Send,
-                    ),
+                vec![
+                    vec![output_var.into(), output.clone()],
+                    vec![input_var.into(), input.clone()],
                 ],
+                vec![
+                    Direction::Send.multiplicity(output_public.into()),
+                    Direction::Send.multiplicity(input_public.into()),
+                ],
+                vec![3 * i + 1],
             ));
-            lookups.push(AirLookupHandler::<AB>::register_lookup(
-                self,
+            lookups.push(Lookup::new(
                 Kind::Global(LIN_LOOKUP_NAME.to_string()),
-                &[
-                    (
-                        vec![input_var.into(), input.into()],
-                        input_linear.into(),
-                        Direction::Send,
-                    ),
-                    (
-                        vec![output_var.into(), output.into()],
-                        output_linear.into(),
-                        Direction::Send,
-                    ),
+                vec![
+                    vec![input_var.into(), input],
+                    vec![output_var.into(), output],
                 ],
+                vec![
+                    Direction::Send.multiplicity(input_linear.into()),
+                    Direction::Send.multiplicity(output_linear.into()),
+                ],
+                vec![3 * i + 2],
             ));
         }
-        self.lookup_count = 0;
         lookups
     }
 }
 
-impl<AB, F, const WIDTH: usize> AirLookupHandler<AB> for PublicVarLookupAir<F, WIDTH>
+impl<F, const WIDTH: usize> LookupAir<F> for PublicVarLookupAir<F, WIDTH>
 where
-    AB: PermutationAirBuilder<F = F> + PairBuilder + AirBuilderWithPublicValues,
     F: Field + Unit + PartialEq + Send + Sync,
 {
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        let idx = self.lookup_count;
-        self.lookup_count += 1;
-        vec![idx]
-    }
-
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        let symbolic = SymbolicAirBuilder::<AB::F, AB::EF>::new(
-            num_public_lookup_cols(),
-            BaseAir::<AB::F>::width(self),
-            0,
-            0,
-            0,
-        );
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
+        let symbolic = SymbolicAirBuilder::<F>::new(AirLayout {
+            preprocessed_width: num_public_lookup_cols(),
+            main_width: BaseAir::<F>::width(self),
+            ..Default::default()
+        });
         let preprocessed = symbolic.preprocessed();
         let row = preprocessed
             .row_slice(0)
             .expect("symbolic preprocessed row should exist");
         let public_column: &PublicLookupCols<_> = (*row).borrow();
-        self.lookup_count = 0;
-        vec![AirLookupHandler::<AB>::register_lookup(
-            self,
+        vec![Lookup::new(
             Kind::Global(PUB_LOOKUP_NAME.to_string()),
-            &[(
-                vec![
-                    public_column.var.clone().into(),
-                    public_column.val.clone().into(),
-                ],
-                public_column.multiplicity.clone().into(),
-                Direction::Receive,
-            )],
+            vec![vec![public_column.var.into(), public_column.val.into()]],
+            vec![Direction::Receive.multiplicity(public_column.multiplicity.into())],
+            vec![0],
         )]
     }
 }
 
-impl<AB, F, const WIDTH: usize, const LIN_WIDTH: usize> AirLookupHandler<AB>
+impl<F, const WIDTH: usize, const LIN_WIDTH: usize> LookupAir<F>
     for LinearConstraintsAir<F, WIDTH, LIN_WIDTH>
 where
-    AB: PermutationAirBuilder<F = F> + PairBuilder + AirBuilderWithPublicValues,
     F: Field + Unit + PartialEq + Send + Sync,
 {
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        let idx = self.lookup_count;
-        self.lookup_count += 1;
-        vec![idx]
-    }
-
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        let symbolic = SymbolicAirBuilder::<AB::F, AB::EF>::new(
-            num_linear_preprocessed_cols::<LIN_WIDTH>(),
-            BaseAir::<AB::F>::width(self),
-            0,
-            0,
-            0,
-        );
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
+        let symbolic = SymbolicAirBuilder::<F>::new(AirLayout {
+            preprocessed_width: num_linear_preprocessed_cols::<LIN_WIDTH>(),
+            main_width: BaseAir::<F>::width(self),
+            ..Default::default()
+        });
         let main = symbolic.main();
         let row = main.row_slice(0).expect("symbolic row should exist");
         let main_cols: &LinearConstraintCols<_, LIN_WIDTH> = (*row).borrow();
@@ -777,26 +714,29 @@ where
         for i in 0..LIN_WIDTH {
             entries.push((
                 vec![
-                    pre_cols.linear_vars[i].clone().into(),
-                    main_cols.linear_combination[i].clone().into(),
+                    pre_cols.linear_vars[i].into(),
+                    main_cols.linear_combination[i].into(),
                 ],
-                pre_cols.linear_multiplicities[i].clone().into(),
+                pre_cols.linear_multiplicities[i].into(),
                 Direction::Receive,
             ));
         }
         entries.push((
-            vec![
-                pre_cols.image_var.clone().into(),
-                main_cols.image.clone().into(),
-            ],
-            pre_cols.image_multiplicity.clone().into(),
+            vec![pre_cols.image_var.into(), main_cols.image.into()],
+            pre_cols.image_multiplicity.into(),
             Direction::Receive,
         ));
-        self.lookup_count = 0;
-        vec![AirLookupHandler::<AB>::register_lookup(
-            self,
+        let (element_exprs, multiplicities_exprs): (Vec<_>, Vec<_>) = entries
+            .into_iter()
+            .map(|(elements, multiplicity, direction)| {
+                (elements, direction.multiplicity(multiplicity))
+            })
+            .unzip();
+        vec![Lookup::new(
             Kind::Global(LIN_LOOKUP_NAME.to_string()),
-            &entries,
+            element_exprs,
+            multiplicities_exprs,
+            vec![0],
         )]
     }
 }
@@ -829,7 +769,7 @@ where
         let multiplicity = public_multiplicities[var.0].unwrap_or(0);
         let offset = row_idx * width;
         values[offset] = F::from_usize(var.0);
-        values[offset + 1] = val.clone();
+        values[offset + 1] = *val;
         values[offset + 2] = F::from_usize(multiplicity);
     }
 
@@ -892,15 +832,14 @@ where
     let mut values = vec![<F as PrimeCharacteristicRing>::ZERO; width * height];
 
     for (row_idx, equation) in lc.as_ref().iter().enumerate() {
-        let linear_coefficients =
-            core::array::from_fn(|i| equation.linear_combination[i].0.clone());
-        let linear_values = core::array::from_fn(|i| equation.linear_combination[i].1.clone());
+        let linear_coefficients = core::array::from_fn(|i| equation.linear_combination[i].0);
+        let linear_values = core::array::from_fn(|i| equation.linear_combination[i].1);
         let offset = row_idx * width;
         let row = &mut values[offset..offset + width];
         let column: &mut LinearConstraintCols<F, LIN_WIDTH> = row.borrow_mut();
         column.linear_coefficients = linear_coefficients;
         column.linear_combination = linear_values;
-        column.image = equation.image.clone();
+        column.image = equation.image;
     }
 
     DenseMatrix::new(values, width)

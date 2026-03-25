@@ -1,16 +1,19 @@
 use crate::{
-    poseidon2::{BabyBearPoseidon2Backend, BabyBearPoseidon2_16HashAir, BABYBEAR_POSEIDON2_WIDTH},
+    poseidon2::{
+        BabyBearPoseidon2Backend, BabyBearPoseidon2_16HashAir, KoalaBearPoseidon2Backend,
+        KoalaBearPoseidon2_16HashAir, POSEIDON2_16_WIDTH,
+    },
     relation, HashInvocationAir, RelationChallenge, RelationField, StarkRelationBackend,
 };
 use alloc::vec::Vec;
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
-use p3_uni_stark::SymbolicExpression;
+use p3_air::SymbolicExpressionExt;
+use p3_field::{Algebra, BasedVectorSpace, Field, PrimeCharacteristicRing};
 use spongefish::{Permutation, Unit};
 use spongefish_circuit::{
     allocator::FieldVar,
     permutation::{LinearEquation, PermutationInstanceBuilder, PermutationWitnessBuilder},
 };
-use spongefish_poseidon2::BabyBearPoseidon2_16;
+use spongefish_poseidon2::{BabyBearPoseidon2_16, KoalaBearPoseidon2_16};
 
 const TEST_LINEAR_WIDTH: usize = 1;
 
@@ -43,7 +46,7 @@ where
 
     instance.allocator().set_public_vars(
         public_outputs.iter().map(|(idx, _)| output_vars[*idx]),
-        public_outputs.iter().map(|(_, val)| val.clone()),
+        public_outputs.iter().map(|(_, val)| *val),
     );
 
     instance.add_equation(LinearEquation::new(
@@ -57,12 +60,12 @@ where
                 FieldVar(0),
             )
         })),
-        output_vals[0].clone(),
+        output_vals[0],
     ));
     witness.add_equation(LinearEquation::new(
         core::iter::once((
             <RelationField<B> as PrimeCharacteristicRing>::ONE,
-            output_vals[0].clone(),
+            output_vals[0],
         ))
         .chain((1..LIN_WIDTH).map(|_| {
             (
@@ -70,7 +73,7 @@ where
                 <RelationField<B> as PrimeCharacteristicRing>::ZERO,
             )
         })),
-        output_vals[0].clone(),
+        output_vals[0],
     ));
 
     (instance, witness)
@@ -86,19 +89,19 @@ fn run_hash_relation_checks<B, H, P, const WIDTH: usize, const LIN_WIDTH: usize>
     P: Permutation<WIDTH, U = RelationField<B>> + Clone,
     RelationField<B>: Field + Unit + PartialEq + Send + Sync,
     RelationChallenge<B>: BasedVectorSpace<RelationField<B>>,
-    SymbolicExpression<RelationChallenge<B>>: From<SymbolicExpression<RelationField<B>>>,
+    SymbolicExpressionExt<RelationField<B>, RelationChallenge<B>>: Algebra<RelationChallenge<B>>,
 {
     let input = sample_input::<RelationField<B>, WIDTH>();
     let expected_output = permutation.permute(&input);
     let public_outputs = Vec::from([
-        (1usize, expected_output[1].clone()),
-        (2usize, expected_output[2].clone()),
-        (3usize, expected_output[3].clone()),
+        (1usize, expected_output[1]),
+        (2usize, expected_output[2]),
+        (3usize, expected_output[3]),
     ]);
 
     let (instance, witness) = build_relation_instance_and_witness::<B, P, WIDTH, LIN_WIDTH>(
         permutation.clone(),
-        input.clone(),
+        input,
         &public_outputs,
     );
 
@@ -114,10 +117,10 @@ fn run_hash_relation_checks<B, H, P, const WIDTH: usize, const LIN_WIDTH: usize>
     let bad_public_outputs = Vec::from([
         (
             1usize,
-            expected_output[1].clone() + <RelationField<B> as PrimeCharacteristicRing>::ONE,
+            expected_output[1] + <RelationField<B> as PrimeCharacteristicRing>::ONE,
         ),
-        (2usize, expected_output[2].clone()),
-        (3usize, expected_output[3].clone()),
+        (2usize, expected_output[2]),
+        (3usize, expected_output[3]),
     ]);
     let (bad_instance, _) = build_relation_instance_and_witness::<B, P, WIDTH, LIN_WIDTH>(
         permutation,
@@ -142,11 +145,23 @@ fn poseidon2_16_relation_proof_and_false_checks() {
         BabyBearPoseidon2Backend,
         BabyBearPoseidon2_16HashAir,
         BabyBearPoseidon2_16,
-        BABYBEAR_POSEIDON2_WIDTH,
+        POSEIDON2_16_WIDTH,
         TEST_LINEAR_WIDTH,
     >(
-        &BabyBearPoseidon2Backend,
+        &BabyBearPoseidon2Backend::default(),
         &BabyBearPoseidon2_16HashAir::default(),
         BabyBearPoseidon2_16::default(),
+    );
+
+    run_hash_relation_checks::<
+        KoalaBearPoseidon2Backend,
+        KoalaBearPoseidon2_16HashAir,
+        KoalaBearPoseidon2_16,
+        POSEIDON2_16_WIDTH,
+        TEST_LINEAR_WIDTH,
+    >(
+        &KoalaBearPoseidon2Backend::default(),
+        &KoalaBearPoseidon2_16HashAir::default(),
+        KoalaBearPoseidon2_16::default(),
     );
 }
