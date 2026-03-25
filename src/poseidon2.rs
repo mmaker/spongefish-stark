@@ -2,24 +2,37 @@ use alloc::vec::Vec;
 use core::{borrow::Borrow, marker::PhantomData};
 
 use p3_air::{Air, AirBuilder, BaseAir};
+#[cfg(feature = "p3-baby-bear")]
 use p3_baby_bear::{
     default_babybear_poseidon2_16, BabyBear, GenericPoseidon2LinearLayersBabyBear,
     Poseidon2BabyBear, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16, BABYBEAR_S_BOX_DEGREE,
 };
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 use p3_challenger::DuplexChallenger;
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 use p3_commit::ExtensionMmcs;
-use p3_field::{extension::BinomialExtensionField, Field, PrimeField};
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
+use p3_field::extension::BinomialExtensionField;
+use p3_field::Field;
+use p3_field::PrimeField;
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 use p3_fri::{create_benchmark_fri_params_zk, HidingFriPcs};
+#[cfg(feature = "p3-koala-bear")]
 use p3_koala_bear::{
     default_koalabear_poseidon2_16, GenericPoseidon2LinearLayersKoalaBear, KoalaBear,
     Poseidon2KoalaBear, KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16, KOALABEAR_S_BOX_DEGREE,
 };
 use p3_matrix::dense::RowMajorMatrix;
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use p3_poseidon2_air::{Poseidon2Air, Poseidon2Cols, RoundConstants};
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{StarkConfig, StarkGenericConfig};
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
+use p3_uni_stark::StarkConfig;
+use p3_uni_stark::StarkGenericConfig;
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 use rand::{rngs::SmallRng, SeedableRng};
 use spongefish::Permutation;
 use spongefish_circuit::permutation::PermutationWitnessBuilder;
@@ -33,24 +46,29 @@ pub const BABYBEAR_POSEIDON2_SBOX_REGISTERS: usize = 1;
 
 pub const KOALABEAR_POSEIDON2_SBOX_REGISTERS: usize = 0;
 
+#[cfg(feature = "p3-baby-bear")]
 #[derive(Clone)]
 pub struct BabyBearPoseidon2_16(Poseidon2BabyBear<POSEIDON2_16_WIDTH>);
 
+#[cfg(feature = "p3-baby-bear")]
 impl From<Poseidon2BabyBear<POSEIDON2_16_WIDTH>> for BabyBearPoseidon2_16 {
     fn from(inner: Poseidon2BabyBear<POSEIDON2_16_WIDTH>) -> Self {
         Self(inner)
     }
 }
 
+#[cfg(feature = "p3-baby-bear")]
 impl Default for BabyBearPoseidon2_16 {
     fn default() -> Self {
         Self(default_babybear_poseidon2_16())
     }
 }
 
+#[cfg(feature = "p3-baby-bear")]
 impl spongefish::Permutation<POSEIDON2_16_WIDTH> for BabyBearPoseidon2_16
 where
-    Poseidon2BabyBear<POSEIDON2_16_WIDTH>: p3_symmetric::Permutation<[BabyBear; POSEIDON2_16_WIDTH]>,
+    Poseidon2BabyBear<POSEIDON2_16_WIDTH>:
+        p3_symmetric::Permutation<[BabyBear; POSEIDON2_16_WIDTH]>,
 {
     type U = BabyBear;
 
@@ -63,21 +81,25 @@ where
     }
 }
 
+#[cfg(feature = "p3-koala-bear")]
 #[derive(Clone)]
 pub struct KoalaBearPoseidon2_16(Poseidon2KoalaBear<POSEIDON2_16_WIDTH>);
 
+#[cfg(feature = "p3-koala-bear")]
 impl From<Poseidon2KoalaBear<POSEIDON2_16_WIDTH>> for KoalaBearPoseidon2_16 {
     fn from(inner: Poseidon2KoalaBear<POSEIDON2_16_WIDTH>) -> Self {
         Self(inner)
     }
 }
 
+#[cfg(feature = "p3-koala-bear")]
 impl Default for KoalaBearPoseidon2_16 {
     fn default() -> Self {
         Self(default_koalabear_poseidon2_16())
     }
 }
 
+#[cfg(feature = "p3-koala-bear")]
 impl spongefish::Permutation<POSEIDON2_16_WIDTH> for KoalaBearPoseidon2_16
 where
     Poseidon2KoalaBear<POSEIDON2_16_WIDTH>:
@@ -143,9 +165,11 @@ pub trait Poseidon2FieldConfig<
     fn round_constants() -> Poseidon2_16RoundConstants<Self::F, PARTIAL_ROUNDS>;
 }
 
+#[cfg(feature = "p3-baby-bear")]
 #[derive(Clone, Copy, Default)]
 pub struct BabyBearPoseidon2Config;
 
+#[cfg(feature = "p3-koala-bear")]
 #[derive(Clone, Copy, Default)]
 pub struct KoalaBearPoseidon2Config;
 
@@ -184,6 +208,7 @@ where
     }
 }
 
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearPoseidon2_16Air = Poseidon2_16Air<
     BabyBear,
     GenericPoseidon2LinearLayersBabyBear,
@@ -192,6 +217,7 @@ pub type BabyBearPoseidon2_16Air = Poseidon2_16Air<
     BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
 >;
 
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearPoseidon2_16Air = Poseidon2_16Air<
     KoalaBear,
     GenericPoseidon2LinearLayersKoalaBear,
@@ -200,17 +226,24 @@ pub type KoalaBearPoseidon2_16Air = Poseidon2_16Air<
     KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16,
 >;
 
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearPoseidon2_16RoundConstants =
     Poseidon2_16RoundConstants<BabyBear, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16>;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearPoseidon2_16RoundConstants =
     Poseidon2_16RoundConstants<KoalaBear, KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16>;
 
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearPoseidon2Challenge = BinomialExtensionField<BabyBear, 4>;
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearTranscriptPerm = Poseidon2BabyBear<POSEIDON2_16_WIDTH>;
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearTranscriptHash =
     PaddingFreeSponge<BabyBearTranscriptPerm, POSEIDON2_16_WIDTH, 8, 8>;
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearTranscriptCompress =
     TruncatedPermutation<BabyBearTranscriptPerm, 2, 8, POSEIDON2_16_WIDTH>;
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearValMmcs = MerkleTreeHidingMmcs<
     <BabyBear as Field>::Packing,
     <BabyBear as Field>::Packing,
@@ -221,22 +254,32 @@ pub type BabyBearValMmcs = MerkleTreeHidingMmcs<
     8,
     4,
 >;
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearChallengeMmcs =
     ExtensionMmcs<BabyBear, BabyBearPoseidon2Challenge, BabyBearValMmcs>;
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearChallenger =
     DuplexChallenger<BabyBear, BabyBearTranscriptPerm, POSEIDON2_16_WIDTH, 8>;
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearDft = p3_dft::Radix2DitParallel<BabyBear>;
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearPcs =
     HidingFriPcs<BabyBear, BabyBearDft, BabyBearValMmcs, BabyBearChallengeMmcs, SmallRng>;
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearPoseidon2StarkConfig =
     StarkConfig<BabyBearPcs, BabyBearPoseidon2Challenge, BabyBearChallenger>;
 
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearPoseidon2Challenge = BinomialExtensionField<KoalaBear, 4>;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearTranscriptPerm = Poseidon2KoalaBear<POSEIDON2_16_WIDTH>;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearTranscriptHash =
     PaddingFreeSponge<KoalaBearTranscriptPerm, POSEIDON2_16_WIDTH, 8, 8>;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearTranscriptCompress =
     TruncatedPermutation<KoalaBearTranscriptPerm, 2, 8, POSEIDON2_16_WIDTH>;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearValMmcs = MerkleTreeHidingMmcs<
     <KoalaBear as Field>::Packing,
     <KoalaBear as Field>::Packing,
@@ -247,16 +290,22 @@ pub type KoalaBearValMmcs = MerkleTreeHidingMmcs<
     8,
     4,
 >;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearChallengeMmcs =
     ExtensionMmcs<KoalaBear, KoalaBearPoseidon2Challenge, KoalaBearValMmcs>;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearChallenger =
     DuplexChallenger<KoalaBear, KoalaBearTranscriptPerm, POSEIDON2_16_WIDTH, 8>;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearDft = p3_dft::Radix2DitParallel<KoalaBear>;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearPcs =
     HidingFriPcs<KoalaBear, KoalaBearDft, KoalaBearValMmcs, KoalaBearChallengeMmcs, SmallRng>;
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearPoseidon2StarkConfig =
     StarkConfig<KoalaBearPcs, KoalaBearPoseidon2Challenge, KoalaBearChallenger>;
 
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearPoseidon2Backend = Poseidon2Backend<
     BabyBearPoseidon2Config,
     BABYBEAR_S_BOX_DEGREE,
@@ -264,6 +313,7 @@ pub type BabyBearPoseidon2Backend = Poseidon2Backend<
     BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
 >;
 
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearPoseidon2Backend = Poseidon2Backend<
     KoalaBearPoseidon2Config,
     KOALABEAR_S_BOX_DEGREE,
@@ -271,6 +321,7 @@ pub type KoalaBearPoseidon2Backend = Poseidon2Backend<
     KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16,
 >;
 
+#[cfg(feature = "p3-baby-bear")]
 pub type BabyBearPoseidon2_16HashAir = Poseidon2_16HashAir<
     BabyBearPoseidon2Config,
     BABYBEAR_S_BOX_DEGREE,
@@ -278,6 +329,7 @@ pub type BabyBearPoseidon2_16HashAir = Poseidon2_16HashAir<
     BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
 >;
 
+#[cfg(feature = "p3-koala-bear")]
 pub type KoalaBearPoseidon2_16HashAir = Poseidon2_16HashAir<
     KoalaBearPoseidon2Config,
     KOALABEAR_S_BOX_DEGREE,
@@ -285,6 +337,7 @@ pub type KoalaBearPoseidon2_16HashAir = Poseidon2_16HashAir<
     KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16,
 >;
 
+#[cfg(feature = "p3-baby-bear")]
 impl
     Poseidon2FieldConfig<
         BABYBEAR_S_BOX_DEGREE,
@@ -323,6 +376,7 @@ impl
     }
 }
 
+#[cfg(feature = "p3-koala-bear")]
 impl
     Poseidon2FieldConfig<
         KOALABEAR_S_BOX_DEGREE,

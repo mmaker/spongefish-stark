@@ -1,11 +1,14 @@
-use crate::{
-    poseidon2::{
-        BabyBearPoseidon2_16, BabyBearPoseidon2Backend, BabyBearPoseidon2_16HashAir,
-        KoalaBearPoseidon2_16, KoalaBearPoseidon2Backend, KoalaBearPoseidon2_16HashAir,
-        POSEIDON2_16_WIDTH,
-    },
-    relation, HashInvocationAir, RelationChallenge, RelationField, StarkRelationBackend,
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
+use crate::poseidon2::POSEIDON2_16_WIDTH;
+#[cfg(feature = "p3-baby-bear")]
+use crate::poseidon2::{
+    BabyBearPoseidon2Backend, BabyBearPoseidon2_16, BabyBearPoseidon2_16HashAir,
 };
+#[cfg(feature = "p3-koala-bear")]
+use crate::poseidon2::{
+    KoalaBearPoseidon2Backend, KoalaBearPoseidon2_16, KoalaBearPoseidon2_16HashAir,
+};
+use crate::{relation, HashInvocationAir, RelationChallenge, RelationField, StarkRelationBackend};
 use alloc::vec::Vec;
 use p3_air::SymbolicExpressionExt;
 #[cfg(feature = "keccak")]
@@ -17,6 +20,7 @@ use spongefish_circuit::{
     permutation::{LinearEquation, PermutationInstanceBuilder, PermutationWitnessBuilder},
 };
 
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 const TEST_LINEAR_WIDTH: usize = 1;
 
 #[cfg(feature = "keccak")]
@@ -44,9 +48,11 @@ const KECCAK256_PREIMAGE_VECTORS: [(&str, &str); 4] = [
     ),
 ];
 
+#[cfg(feature = "p3-baby-bear")]
 #[derive(Clone)]
 struct WrongOutputPermutation<P>(P);
 
+#[cfg(feature = "p3-baby-bear")]
 impl<P, const WIDTH: usize> Permutation<WIDTH> for WrongOutputPermutation<P>
 where
     P: Permutation<WIDTH>,
@@ -61,6 +67,7 @@ where
     }
 }
 
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 fn sample_input<F, const WIDTH: usize>() -> [F; WIDTH]
 where
     F: Field + Unit + PartialEq,
@@ -220,6 +227,7 @@ where
     (instance, witness)
 }
 
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 fn build_relation_instance_and_witness<B, P, const WIDTH: usize, const LIN_WIDTH: usize>(
     permutation: P,
     input: [RelationField<B>; WIDTH],
@@ -275,6 +283,7 @@ where
     (instance, witness)
 }
 
+#[cfg(any(feature = "p3-baby-bear", feature = "p3-koala-bear"))]
 fn run_hash_relation_checks<B, H, P, const WIDTH: usize, const LIN_WIDTH: usize>(
     backend: &B,
     hash: &H,
@@ -335,8 +344,9 @@ fn run_hash_relation_checks<B, H, P, const WIDTH: usize, const LIN_WIDTH: usize>
     );
 }
 
+#[cfg(feature = "p3-baby-bear")]
 #[test]
-fn poseidon2_16_relation_proof_and_false_checks() {
+fn babybear_poseidon2_16_relation_proof_and_false_checks() {
     run_hash_relation_checks::<
         BabyBearPoseidon2Backend,
         BabyBearPoseidon2_16HashAir,
@@ -348,7 +358,11 @@ fn poseidon2_16_relation_proof_and_false_checks() {
         &BabyBearPoseidon2_16HashAir::default(),
         BabyBearPoseidon2_16::default(),
     );
+}
 
+#[cfg(feature = "p3-koala-bear")]
+#[test]
+fn koalabear_poseidon2_16_relation_proof_and_false_checks() {
     run_hash_relation_checks::<
         KoalaBearPoseidon2Backend,
         KoalaBearPoseidon2_16HashAir,
@@ -500,6 +514,7 @@ fn keccak_relation_rejects_non_16_bit_inputs() {
     assert!(result.is_err());
 }
 
+#[cfg(feature = "p3-baby-bear")]
 #[test]
 fn poseidon2_16_relation_rejects_wrong_witness_outputs() {
     let backend = BabyBearPoseidon2Backend::default();
@@ -562,6 +577,7 @@ fn poseidon2_16_relation_rejects_wrong_witness_outputs() {
     assert!(worker.join().is_err());
 }
 
+#[cfg(feature = "p3-baby-bear")]
 #[test]
 #[should_panic(expected = "must have exactly 1 terms")]
 fn poseidon2_16_relation_panics_on_malformed_linear_constraints() {
