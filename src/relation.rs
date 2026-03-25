@@ -27,6 +27,10 @@ use crate::{
 
 /// The first lookup, checking that outputs re-appear as inputs.
 pub const IO_LOOKUP_NAME: &str = "in-out";
+/// The value-level lookup emitted by the real hash AIR.
+pub const HASH_VALUES_LOOKUP_NAME: &str = "hash-values";
+/// The value-level lookup routed from unique hash rows to logical bindings.
+pub const BINDING_VALUES_LOOKUP_NAME: &str = "binding-values";
 /// The second lookup, checking that public variables are correctly assigned.
 pub const PUB_LOOKUP_NAME: &str = "public-vars";
 /// The third lookup, checking linear relations between inputs and outputs.
@@ -45,6 +49,21 @@ struct LookupCols<T, const WIDTH: usize> {
     output_public: [T; WIDTH],
     input_linear_constraints: [T; WIDTH],
     output_linear_constraints: [T; WIDTH],
+}
+
+#[repr(C)]
+struct BindingCols<T, const WIDTH: usize> {
+    input: [T; WIDTH],
+    output: [T; WIDTH],
+    active: T,
+}
+
+#[repr(C)]
+struct ValueMultiplicityCols<T, const WIDTH: usize> {
+    input: [T; WIDTH],
+    output: [T; WIDTH],
+    multiplicity: T,
+    active: T,
 }
 
 #[repr(C)]
@@ -95,6 +114,48 @@ impl<T> Borrow<PublicLookupCols<T>> for [T] {
         debug_assert!(suffix.is_empty());
         debug_assert_eq!(shorts.len(), 1);
         &shorts[0]
+    }
+}
+
+impl<T, const WIDTH: usize> Borrow<BindingCols<T, WIDTH>> for [T] {
+    fn borrow(&self) -> &BindingCols<T, WIDTH> {
+        let (prefix, shorts, suffix) = unsafe { self.align_to::<BindingCols<T, WIDTH>>() };
+        debug_assert!(prefix.is_empty());
+        debug_assert!(suffix.is_empty());
+        debug_assert_eq!(shorts.len(), 1);
+        &shorts[0]
+    }
+}
+
+impl<T, const WIDTH: usize> BorrowMut<BindingCols<T, WIDTH>> for [T] {
+    fn borrow_mut(&mut self) -> &mut BindingCols<T, WIDTH> {
+        let (prefix, shorts, suffix) = unsafe { self.align_to_mut::<BindingCols<T, WIDTH>>() };
+        debug_assert!(prefix.is_empty());
+        debug_assert!(suffix.is_empty());
+        debug_assert_eq!(shorts.len(), 1);
+        &mut shorts[0]
+    }
+}
+
+impl<T, const WIDTH: usize> Borrow<ValueMultiplicityCols<T, WIDTH>> for [T] {
+    fn borrow(&self) -> &ValueMultiplicityCols<T, WIDTH> {
+        let (prefix, shorts, suffix) =
+            unsafe { self.align_to::<ValueMultiplicityCols<T, WIDTH>>() };
+        debug_assert!(prefix.is_empty());
+        debug_assert!(suffix.is_empty());
+        debug_assert_eq!(shorts.len(), 1);
+        &shorts[0]
+    }
+}
+
+impl<T, const WIDTH: usize> BorrowMut<ValueMultiplicityCols<T, WIDTH>> for [T] {
+    fn borrow_mut(&mut self) -> &mut ValueMultiplicityCols<T, WIDTH> {
+        let (prefix, shorts, suffix) =
+            unsafe { self.align_to_mut::<ValueMultiplicityCols<T, WIDTH>>() };
+        debug_assert!(prefix.is_empty());
+        debug_assert!(suffix.is_empty());
+        debug_assert_eq!(shorts.len(), 1);
+        &mut shorts[0]
     }
 }
 
@@ -162,6 +223,14 @@ const fn num_public_lookup_cols() -> usize {
     size_of::<PublicLookupCols<u8>>()
 }
 
+const fn num_binding_main_cols<const WIDTH: usize>() -> usize {
+    size_of::<BindingCols<u8, WIDTH>>()
+}
+
+const fn num_value_main_cols<const WIDTH: usize>() -> usize {
+    size_of::<ValueMultiplicityCols<u8, WIDTH>>()
+}
+
 const fn num_linear_main_cols<const LIN_WIDTH: usize>() -> usize {
     size_of::<LinearConstraintCols<u8, LIN_WIDTH>>()
 }
@@ -171,9 +240,16 @@ const fn num_linear_preprocessed_cols<const LIN_WIDTH: usize>() -> usize {
 }
 
 #[derive(Clone)]
-struct HashLookupAir<H, F, const WIDTH: usize, const LIN_WIDTH: usize> {
+struct HashLookupAir<H, const WIDTH: usize> {
     hash: H,
-    builder: PermutationInstanceBuilder<F, WIDTH>,
+}
+
+#[derive(Clone)]
+struct ValueMultiplicityAir<const WIDTH: usize>;
+
+#[derive(Clone)]
+struct BindingLookupAir<F, const WIDTH: usize, const LIN_WIDTH: usize> {
+    instance: PermutationInstanceBuilder<F, WIDTH>,
     linear_constraints: Option<LinearConstraintsInstance<F>>,
     trace_len: usize,
 }
@@ -193,21 +269,33 @@ struct LinearConstraintsAir<F, const WIDTH: usize, const LIN_WIDTH: usize> {
 
 #[derive(Clone)]
 enum GenericHashRelationAir<H, F, const WIDTH: usize, const LIN_WIDTH: usize> {
-    Hash(Box<HashLookupAir<H, F, WIDTH, LIN_WIDTH>>),
+    Hash(Box<HashLookupAir<H, WIDTH>>),
+    Unique(ValueMultiplicityAir<WIDTH>),
+    Binding(BindingLookupAir<F, WIDTH, LIN_WIDTH>),
     Public(PublicVarLookupAir<F, WIDTH>),
     Linear(LinearConstraintsAir<F, WIDTH, LIN_WIDTH>),
 }
 
-impl<H, F, const WIDTH: usize, const LIN_WIDTH: usize> HashLookupAir<H, F, WIDTH, LIN_WIDTH> {
+impl<H, const WIDTH: usize> HashLookupAir<H, WIDTH> {
+    fn new(hash: H) -> Self {
+        Self { hash }
+    }
+}
+
+impl<const WIDTH: usize> ValueMultiplicityAir<WIDTH> {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl<F, const WIDTH: usize, const LIN_WIDTH: usize> BindingLookupAir<F, WIDTH, LIN_WIDTH> {
     fn new_with_linear(
-        hash: H,
-        builder: PermutationInstanceBuilder<F, WIDTH>,
+        instance: PermutationInstanceBuilder<F, WIDTH>,
         linear_constraints: LinearConstraintsInstance<F>,
         trace_len: usize,
     ) -> Self {
         Self {
-            hash,
-            builder,
+            instance,
             linear_constraints: Some(linear_constraints),
             trace_len,
         }
@@ -254,18 +342,11 @@ where
     RelationChallenge<B>: BasedVectorSpace<RelationField<B>>,
     SymbolicExpressionExt<RelationField<B>, RelationChallenge<B>>: Algebra<RelationChallenge<B>>,
 {
-    let logical_target_len = target_len_with_linear(instance);
-    pad_witness_permutations(instance, witness, logical_target_len);
-    let target_len = hash_trace_target_len(hash, instance).max(logical_target_len);
     let (mut airs, traces) =
         generate_trace_rows_with_linear::<H, RelationField<B>, P, WIDTH, LIN_WIDTH>(
             hash, instance, witness,
         );
-    let traces = traces
-        .into_iter()
-        .map(|trace| pad_dense_matrix_to_height(trace, target_len))
-        .collect::<Vec<_>>();
-    let log_degrees = trace_degree_bits(&traces, target_len);
+    let log_degrees = trace_degree_bits(&traces);
     let config = backend.config(2024);
     let log_ext_degrees = log_ext_degrees(&log_degrees, &config);
     let prover_data = ProverData::from_airs_and_degrees(&config, &mut airs, &log_ext_degrees);
@@ -295,31 +376,25 @@ where
     let config = backend.config(2024);
     let proof: BatchProof<B::Config> =
         postcard::from_bytes(proof_bytes).map_err(|_| VerificationError)?;
-    let logical_target_len = target_len_with_linear(instance);
-    pad_instance_permutations(instance, logical_target_len);
-    let target_len = hash_trace_target_len(hash, instance).max(logical_target_len);
-    if let Some(&log_degree) = proof.degree_bits.first() {
-        let proof_len = 1usize << log_degree.saturating_sub(config.is_zk());
-        assert_eq!(target_len, proof_len);
-    }
+    let degree_bits = &proof.degree_bits;
+    assert_eq!(degree_bits.len(), 5);
+    let trace_len = |idx: usize| 1usize << degree_bits[idx].saturating_sub(config.is_zk());
     let mut airs = vec![
-        GenericHashRelationAir::Hash(Box::new(HashLookupAir::<
-            H,
-            RelationField<B>,
-            WIDTH,
-            LIN_WIDTH,
-        >::new_with_linear(
-            hash.clone(),
-            instance.clone(),
-            linear_constraints.clone(),
-            target_len,
-        ))),
-        GenericHashRelationAir::Public(PublicVarLookupAir::new(instance.clone(), target_len)),
+        GenericHashRelationAir::Hash(Box::new(HashLookupAir::<H, WIDTH>::new(hash.clone()))),
+        GenericHashRelationAir::Unique(ValueMultiplicityAir::new()),
+        GenericHashRelationAir::Binding(
+            BindingLookupAir::<RelationField<B>, WIDTH, LIN_WIDTH>::new_with_linear(
+                instance.clone(),
+                linear_constraints.clone(),
+                trace_len(2),
+            ),
+        ),
+        GenericHashRelationAir::Public(PublicVarLookupAir::new(instance.clone(), trace_len(3))),
         GenericHashRelationAir::Linear(
             LinearConstraintsAir::<RelationField<B>, WIDTH, LIN_WIDTH>::new(
                 instance.clone(),
                 linear_constraints,
-                target_len,
+                trace_len(4),
             ),
         ),
     ];
@@ -344,37 +419,55 @@ where
 {
     let linear_constraints = instance.linear_constraints();
     let linear_witness = witness.linear_constraints();
+    let witness_trace = witness.trace();
+    let witness_rows = witness_trace.as_ref();
+    let instance_constraints = instance.constraints();
     assert_eq!(
         linear_constraints.as_ref().len(),
         linear_witness.as_ref().len()
     );
+    assert_eq!(instance_constraints.as_ref().len(), witness_rows.len());
     validate_linear_constraints::<LIN_WIDTH, _, _>(&linear_constraints, "instance");
     validate_linear_constraints::<LIN_WIDTH, _, _>(&linear_witness, "witness");
 
-    let hash_trace = build_hash_lookup_trace(hash, witness);
-    let trace_len = hash_trace.height().max(target_len_with_linear(instance));
-    let trace = pad_dense_matrix_to_height(hash_trace, trace_len);
-    let public_trace = build_public_lookup_main_trace::<F>(trace_len);
+    let compressed_witness = compress_query_answer_pairs(witness_rows);
+    let hash_trace = build_hash_lookup_trace(hash, &compressed_witness);
+    let unique_trace = build_value_multiplicity_trace(&compressed_witness);
+    let binding_trace = build_binding_lookup_trace(witness_rows);
+    let public_trace = build_public_lookup_main_trace::<F>(
+        instance.public_vars().len().next_power_of_two().max(1),
+    );
     let linear_trace = build_linear_constraints_trace::<F, LIN_WIDTH>(&linear_witness);
 
     let airs = vec![
-        GenericHashRelationAir::Hash(Box::new(
-            HashLookupAir::<H, F, WIDTH, LIN_WIDTH>::new_with_linear(
-                hash.clone(),
-                instance.clone(),
-                linear_constraints.clone(),
-                trace_len,
-            ),
+        GenericHashRelationAir::Hash(Box::new(HashLookupAir::<H, WIDTH>::new(hash.clone()))),
+        GenericHashRelationAir::Unique(ValueMultiplicityAir::new()),
+        GenericHashRelationAir::Binding(BindingLookupAir::<F, WIDTH, LIN_WIDTH>::new_with_linear(
+            instance.clone(),
+            linear_constraints.clone(),
+            binding_trace.height(),
         )),
-        GenericHashRelationAir::Public(PublicVarLookupAir::new(instance.clone(), trace_len)),
+        GenericHashRelationAir::Public(PublicVarLookupAir::new(
+            instance.clone(),
+            public_trace.height(),
+        )),
         GenericHashRelationAir::Linear(LinearConstraintsAir::<F, WIDTH, LIN_WIDTH>::new(
             instance.clone(),
             linear_constraints,
-            trace_len,
+            linear_trace.height(),
         )),
     ];
 
-    (airs, vec![trace, public_trace, linear_trace])
+    (
+        airs,
+        vec![
+            hash_trace,
+            unique_trace,
+            binding_trace,
+            public_trace,
+            linear_trace,
+        ],
+    )
 }
 
 impl<H, F, const WIDTH: usize, const LIN_WIDTH: usize> BaseAir<F>
@@ -385,7 +478,9 @@ where
 {
     fn width(&self) -> usize {
         match self {
-            Self::Hash(air) => <HashLookupAir<H, F, WIDTH, LIN_WIDTH> as BaseAir<F>>::width(air),
+            Self::Hash(air) => <HashLookupAir<H, WIDTH> as BaseAir<F>>::width(air),
+            Self::Unique(air) => <ValueMultiplicityAir<WIDTH> as BaseAir<F>>::width(air),
+            Self::Binding(air) => <BindingLookupAir<F, WIDTH, LIN_WIDTH> as BaseAir<F>>::width(air),
             Self::Public(air) => <PublicVarLookupAir<F, WIDTH> as BaseAir<F>>::width(air),
             Self::Linear(air) => {
                 <LinearConstraintsAir<F, WIDTH, LIN_WIDTH> as BaseAir<F>>::width(air)
@@ -395,8 +490,12 @@ where
 
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         match self {
-            Self::Hash(air) => {
-                <HashLookupAir<H, F, WIDTH, LIN_WIDTH> as BaseAir<F>>::preprocessed_trace(air)
+            Self::Hash(air) => <HashLookupAir<H, WIDTH> as BaseAir<F>>::preprocessed_trace(air),
+            Self::Unique(air) => {
+                <ValueMultiplicityAir<WIDTH> as BaseAir<F>>::preprocessed_trace(air)
+            }
+            Self::Binding(air) => {
+                <BindingLookupAir<F, WIDTH, LIN_WIDTH> as BaseAir<F>>::preprocessed_trace(air)
             }
             Self::Public(air) => {
                 <PublicVarLookupAir<F, WIDTH> as BaseAir<F>>::preprocessed_trace(air)
@@ -408,8 +507,7 @@ where
     }
 }
 
-impl<H, F, const WIDTH: usize, const LIN_WIDTH: usize> BaseAir<F>
-    for HashLookupAir<H, F, WIDTH, LIN_WIDTH>
+impl<H, F, const WIDTH: usize> BaseAir<F> for HashLookupAir<H, WIDTH>
 where
     H: HashInvocationAir<F, WIDTH> + Sync,
     F: Field + Unit + PartialEq + Send + Sync,
@@ -417,66 +515,32 @@ where
     fn width(&self) -> usize {
         self.hash.main_width()
     }
+}
+
+impl<F, const WIDTH: usize> BaseAir<F> for ValueMultiplicityAir<WIDTH>
+where
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    fn width(&self) -> usize {
+        num_value_main_cols::<WIDTH>()
+    }
+}
+
+impl<F, const WIDTH: usize, const LIN_WIDTH: usize> BaseAir<F>
+    for BindingLookupAir<F, WIDTH, LIN_WIDTH>
+where
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    fn width(&self) -> usize {
+        num_binding_main_cols::<WIDTH>()
+    }
 
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
-        let input_outputs = self.builder.constraints();
-        let vars_count = self.builder.allocator().vars_count();
-        let output_count = input_outputs.as_ref().len();
-        let rows_per_invocation = self.hash.trace_rows_per_invocation();
-        let unpadded_rows = output_count * rows_per_invocation;
-        let mut ptrace = DenseMatrix::new(
-            vec![<F as PrimeCharacteristicRing>::ZERO; num_lookup_cols::<WIDTH>() * self.trace_len],
-            num_lookup_cols::<WIDTH>(),
+        let trace = build_binding_preprocessed_trace::<F, WIDTH>(
+            &self.instance,
+            self.linear_constraints.as_ref(),
         );
-
-        let public_multiplicities = public_multiplicities(&self.builder);
-        let linear_multiplicities = self.linear_constraints.as_ref().map(lin_multiplicities);
-        let linear_lookup_multiplicities = self.linear_constraints.as_ref().map(|constraints| {
-            linear_lookup_multiplicities::<WIDTH>(
-                input_outputs.as_ref(),
-                &lin_multiplicities(constraints),
-            )
-        });
-        let output_multiplicities = output_multiplicities(input_outputs.as_ref(), vars_count);
-        let input_multiplicities = input_multiplicities(input_outputs.as_ref(), vars_count);
-        let linear_inputs = linear_lookup_multiplicities
-            .as_ref()
-            .map(|(input, _)| input.clone())
-            .unwrap_or_else(|| vec![[0; WIDTH]; output_count]);
-        let linear_outputs = linear_lookup_multiplicities
-            .as_ref()
-            .map(|(_, output)| output.clone())
-            .unwrap_or_else(|| vec![[0; WIDTH]; output_count]);
-
-        for (row_idx, column) in ptrace.rows_mut().take(unpadded_rows).enumerate() {
-            let pair_idx = row_idx / rows_per_invocation;
-            let pair = &input_outputs.as_ref()[pair_idx];
-            let output_mult = output_multiplicities[pair_idx];
-            let input_mult = input_multiplicities[pair_idx];
-            let linear_input = linear_inputs[pair_idx];
-            let linear_output = linear_outputs[pair_idx];
-            let lookup: &mut LookupCols<F, WIDTH> = column.borrow_mut();
-            lookup.input_public = pair
-                .input
-                .map(|var| F::from_bool(public_multiplicities[var.0].is_some()));
-            lookup.output_public = pair
-                .output
-                .map(|var| F::from_bool(public_multiplicities[var.0].is_some()));
-            lookup.input_vars = pair.input.map(|var| F::from_usize(var.0));
-            lookup.output_vars = pair.output.map(|var| F::from_usize(var.0));
-            lookup.output_multiplicities = output_mult.map(F::from_usize);
-            lookup.input_multiplicities = input_mult.map(F::from_usize);
-            lookup.input_linear_constraints = match &linear_multiplicities {
-                Some(_) => linear_input.map(F::from_usize),
-                None => core::array::from_fn(|_| <F as PrimeCharacteristicRing>::ZERO),
-            };
-            lookup.output_linear_constraints = match &linear_multiplicities {
-                Some(_) => linear_output.map(F::from_usize),
-                None => core::array::from_fn(|_| <F as PrimeCharacteristicRing>::ZERO),
-            };
-        }
-
-        Some(ptrace)
+        Some(pad_dense_matrix_to_height(trace, self.trace_len))
     }
 }
 
@@ -519,8 +583,10 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         match self {
-            Self::Hash(air) => {
-                <HashLookupAir<H, F, WIDTH, LIN_WIDTH> as Air<AB>>::eval(air, builder)
+            Self::Hash(air) => <HashLookupAir<H, WIDTH> as Air<AB>>::eval(air, builder),
+            Self::Unique(air) => <ValueMultiplicityAir<WIDTH> as Air<AB>>::eval(air, builder),
+            Self::Binding(air) => {
+                <BindingLookupAir<F, WIDTH, LIN_WIDTH> as Air<AB>>::eval(air, builder)
             }
             Self::Public(air) => <PublicVarLookupAir<F, WIDTH> as Air<AB>>::eval(air, builder),
             Self::Linear(air) => {
@@ -530,8 +596,7 @@ where
     }
 }
 
-impl<AB, H, F, const WIDTH: usize, const LIN_WIDTH: usize> Air<AB>
-    for HashLookupAir<H, F, WIDTH, LIN_WIDTH>
+impl<AB, H, F, const WIDTH: usize> Air<AB> for HashLookupAir<H, WIDTH>
 where
     AB: AirBuilder<F = F>,
     H: HashInvocationAir<F, WIDTH> + Sync,
@@ -540,6 +605,23 @@ where
     fn eval(&self, builder: &mut AB) {
         self.hash.eval(builder);
     }
+}
+
+impl<AB, F, const WIDTH: usize> Air<AB> for ValueMultiplicityAir<WIDTH>
+where
+    AB: AirBuilder<F = F>,
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    fn eval(&self, _builder: &mut AB) {}
+}
+
+impl<AB, F, const WIDTH: usize, const LIN_WIDTH: usize> Air<AB>
+    for BindingLookupAir<F, WIDTH, LIN_WIDTH>
+where
+    AB: AirBuilder<F = F>,
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    fn eval(&self, _builder: &mut AB) {}
 }
 
 impl<AB, F, const WIDTH: usize> Air<AB> for PublicVarLookupAir<F, WIDTH>
@@ -580,8 +662,12 @@ where
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         match self {
-            Self::Hash(air) => {
-                <HashLookupAir<H, F, WIDTH, LIN_WIDTH> as LookupAir<F>>::add_lookup_columns(air)
+            Self::Hash(air) => <HashLookupAir<H, WIDTH> as LookupAir<F>>::add_lookup_columns(air),
+            Self::Unique(air) => {
+                <ValueMultiplicityAir<WIDTH> as LookupAir<F>>::add_lookup_columns(air)
+            }
+            Self::Binding(air) => {
+                <BindingLookupAir<F, WIDTH, LIN_WIDTH> as LookupAir<F>>::add_lookup_columns(air)
             }
             Self::Public(air) => {
                 <PublicVarLookupAir<F, WIDTH> as LookupAir<F>>::add_lookup_columns(air)
@@ -594,8 +680,10 @@ where
 
     fn get_lookups(&mut self) -> Vec<Lookup<F>> {
         match self {
-            Self::Hash(air) => {
-                <HashLookupAir<H, F, WIDTH, LIN_WIDTH> as LookupAir<F>>::get_lookups(air)
+            Self::Hash(air) => <HashLookupAir<H, WIDTH> as LookupAir<F>>::get_lookups(air),
+            Self::Unique(air) => <ValueMultiplicityAir<WIDTH> as LookupAir<F>>::get_lookups(air),
+            Self::Binding(air) => {
+                <BindingLookupAir<F, WIDTH, LIN_WIDTH> as LookupAir<F>>::get_lookups(air)
             }
             Self::Public(air) => <PublicVarLookupAir<F, WIDTH> as LookupAir<F>>::get_lookups(air),
             Self::Linear(air) => {
@@ -605,10 +693,73 @@ where
     }
 }
 
-impl<H, F, const WIDTH: usize, const LIN_WIDTH: usize> LookupAir<F>
-    for HashLookupAir<H, F, WIDTH, LIN_WIDTH>
+impl<H, F, const WIDTH: usize> LookupAir<F> for HashLookupAir<H, WIDTH>
 where
     H: HashInvocationAir<F, WIDTH> + Sync,
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
+        let symbolic = SymbolicAirBuilder::<F>::new(AirLayout {
+            main_width: BaseAir::<F>::width(self),
+            ..Default::default()
+        });
+        let main = symbolic.main();
+        let row = main.row_slice(0).expect("symbolic row should exist");
+        let frame = self.hash.row_frame(&row);
+        let invocation = self.hash.invocation::<SymbolicAirBuilder<F>>(&frame);
+        let selector = self.hash.lookup_selector::<SymbolicAirBuilder<F>>(&frame);
+        type Expr<F> = <SymbolicAirBuilder<F> as AirBuilder>::Expr;
+
+        vec![Lookup::new(
+            Kind::Global(HASH_VALUES_LOOKUP_NAME.to_string()),
+            vec![value_lookup_elements::<_, Expr<F>, WIDTH>(
+                &invocation.input,
+                &invocation.output,
+            )],
+            vec![Direction::Send.multiplicity(selector)],
+            vec![0],
+        )]
+    }
+}
+
+impl<F, const WIDTH: usize> LookupAir<F> for ValueMultiplicityAir<WIDTH>
+where
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
+        let symbolic = SymbolicAirBuilder::<F>::new(AirLayout {
+            main_width: BaseAir::<F>::width(self),
+            ..Default::default()
+        });
+        let main = symbolic.main();
+        let row = main.row_slice(0).expect("symbolic row should exist");
+        let cols: &ValueMultiplicityCols<_, WIDTH> = (*row).borrow();
+        type Expr<F> = <SymbolicAirBuilder<F> as AirBuilder>::Expr;
+        let values: Vec<Expr<F>> =
+            value_lookup_elements::<_, Expr<F>, WIDTH>(&cols.input, &cols.output);
+        let active: Expr<F> = cols.active.into();
+        let multiplicity: Expr<F> = cols.multiplicity.into();
+
+        vec![
+            Lookup::new(
+                Kind::Global(HASH_VALUES_LOOKUP_NAME.to_string()),
+                vec![values.clone()],
+                vec![Direction::Receive.multiplicity(active.clone())],
+                vec![0],
+            ),
+            Lookup::new(
+                Kind::Global(BINDING_VALUES_LOOKUP_NAME.to_string()),
+                vec![values],
+                vec![Direction::Send.multiplicity(active * multiplicity)],
+                vec![1],
+            ),
+        ]
+    }
+}
+
+impl<F, const WIDTH: usize, const LIN_WIDTH: usize> LookupAir<F>
+    for BindingLookupAir<F, WIDTH, LIN_WIDTH>
+where
     F: Field + Unit + PartialEq + Send + Sync,
 {
     fn get_lookups(&mut self) -> Vec<Lookup<F>> {
@@ -619,70 +770,72 @@ where
         });
         let main = symbolic.main();
         let row = main.row_slice(0).expect("symbolic row should exist");
-        let frame = self.hash.row_frame(&row);
-        let invocation = self.hash.invocation::<SymbolicAirBuilder<F>>(&frame);
-        let selector = self.hash.lookup_selector::<SymbolicAirBuilder<F>>(&frame);
+        let binding: &BindingCols<_, WIDTH> = (*row).borrow();
         let preprocessed = symbolic.preprocessed();
         let lookup_row = preprocessed
             .row_slice(0)
             .expect("symbolic row should exist");
         let lookup_column: &LookupCols<_, WIDTH> = (*lookup_row).borrow();
         type Expr<F> = <SymbolicAirBuilder<F> as AirBuilder>::Expr;
+        let active: Expr<F> = binding.active.into();
 
-        let mut lookups = Vec::new();
+        let mut lookups = vec![Lookup::new(
+            Kind::Global(BINDING_VALUES_LOOKUP_NAME.to_string()),
+            vec![value_lookup_elements::<_, Expr<F>, WIDTH>(
+                &binding.input,
+                &binding.output,
+            )],
+            vec![Direction::Receive.multiplicity(active.clone())],
+            vec![0],
+        )];
+
         for i in 0..WIDTH {
-            let input = invocation.input[i].clone();
-            let output = invocation.output[i].clone();
+            let input = binding.input[i].clone();
+            let output = binding.output[i].clone();
             let input_var = lookup_column.input_vars[i];
             let output_var = lookup_column.output_vars[i];
-            let input_multiplicity = lookup_column.input_multiplicities[i];
-            let output_multiplicity = lookup_column.output_multiplicities[i];
-            let input_public = lookup_column.input_public[i];
-            let output_public = lookup_column.output_public[i];
-            let input_linear = lookup_column.input_linear_constraints[i];
-            let output_linear = lookup_column.output_linear_constraints[i];
-            let input_multiplicity: Expr<F> = input_multiplicity.into();
-            let output_multiplicity: Expr<F> = output_multiplicity.into();
-            let input_public: Expr<F> = input_public.into();
-            let output_public: Expr<F> = output_public.into();
-            let input_linear: Expr<F> = input_linear.into();
-            let output_linear: Expr<F> = output_linear.into();
+            let input_multiplicity: Expr<F> = lookup_column.input_multiplicities[i].into();
+            let output_multiplicity: Expr<F> = lookup_column.output_multiplicities[i].into();
+            let input_public: Expr<F> = lookup_column.input_public[i].into();
+            let output_public: Expr<F> = lookup_column.output_public[i].into();
+            let input_linear: Expr<F> = lookup_column.input_linear_constraints[i].into();
+            let output_linear: Expr<F> = lookup_column.output_linear_constraints[i].into();
 
             lookups.push(Lookup::new(
                 Kind::Global(IO_LOOKUP_NAME.to_string()),
                 vec![
-                    vec![input_var.into(), input.clone()],
-                    vec![output_var.into(), output.clone()],
+                    vec![input_var.into(), input.clone().into()],
+                    vec![output_var.into(), output.clone().into()],
                 ],
                 vec![
-                    Direction::Send.multiplicity(selector.clone() * input_multiplicity),
-                    Direction::Receive.multiplicity(selector.clone() * output_multiplicity),
-                ],
-                vec![3 * i],
-            ));
-            lookups.push(Lookup::new(
-                Kind::Global(PUB_LOOKUP_NAME.to_string()),
-                vec![
-                    vec![output_var.into(), output.clone()],
-                    vec![input_var.into(), input.clone()],
-                ],
-                vec![
-                    Direction::Send.multiplicity(selector.clone() * output_public),
-                    Direction::Send.multiplicity(selector.clone() * input_public),
+                    Direction::Send.multiplicity(active.clone() * input_multiplicity),
+                    Direction::Receive.multiplicity(active.clone() * output_multiplicity),
                 ],
                 vec![3 * i + 1],
             ));
             lookups.push(Lookup::new(
-                Kind::Global(LIN_LOOKUP_NAME.to_string()),
+                Kind::Global(PUB_LOOKUP_NAME.to_string()),
                 vec![
-                    vec![input_var.into(), input],
-                    vec![output_var.into(), output],
+                    vec![output_var.into(), output.clone().into()],
+                    vec![input_var.into(), input.clone().into()],
                 ],
                 vec![
-                    Direction::Send.multiplicity(selector.clone() * input_linear),
-                    Direction::Send.multiplicity(selector.clone() * output_linear),
+                    Direction::Send.multiplicity(active.clone() * output_public),
+                    Direction::Send.multiplicity(active.clone() * input_public),
                 ],
                 vec![3 * i + 2],
+            ));
+            lookups.push(Lookup::new(
+                Kind::Global(LIN_LOOKUP_NAME.to_string()),
+                vec![
+                    vec![input_var.into(), input.into()],
+                    vec![output_var.into(), output.into()],
+                ],
+                vec![
+                    Direction::Send.multiplicity(active.clone() * input_linear),
+                    Direction::Send.multiplicity(active.clone() * output_linear),
+                ],
+                vec![3 * i + 3],
             ));
         }
         lookups
@@ -759,16 +912,136 @@ where
     }
 }
 
-fn build_hash_lookup_trace<H, F, P, const WIDTH: usize>(
+#[derive(Clone)]
+struct CountedQueryAnswerPair<T, const WIDTH: usize> {
+    pair: QueryAnswerPair<T, WIDTH>,
+    multiplicity: usize,
+}
+
+fn build_hash_lookup_trace<H, F, const WIDTH: usize>(
     hash: &H,
-    witness: &PermutationWitnessBuilder<P, WIDTH>,
+    witness_rows: &[CountedQueryAnswerPair<F, WIDTH>],
 ) -> DenseMatrix<F>
 where
     H: HashInvocationAir<F, WIDTH>,
-    P: Permutation<WIDTH, U = F>,
     F: Field,
 {
-    hash.build_trace(witness, 2)
+    hash.build_trace(
+        &witness_rows
+            .iter()
+            .map(|row| row.pair.clone())
+            .collect::<Vec<_>>(),
+        2,
+    )
+}
+
+fn build_value_multiplicity_trace<F, const WIDTH: usize>(
+    witness_rows: &[CountedQueryAnswerPair<F, WIDTH>],
+) -> DenseMatrix<F>
+where
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    let width = num_value_main_cols::<WIDTH>();
+    let height = witness_rows.len().next_power_of_two().max(1);
+    let mut values = vec![<F as PrimeCharacteristicRing>::ZERO; width * height];
+
+    for (row_idx, row_data) in witness_rows.iter().enumerate() {
+        let offset = row_idx * width;
+        let row = &mut values[offset..offset + width];
+        let cols: &mut ValueMultiplicityCols<F, WIDTH> = row.borrow_mut();
+        cols.input = row_data.pair.input;
+        cols.output = row_data.pair.output;
+        cols.multiplicity = F::from_usize(row_data.multiplicity);
+        cols.active = <F as PrimeCharacteristicRing>::ONE;
+    }
+
+    DenseMatrix::new(values, width)
+}
+
+fn build_binding_lookup_trace<F, const WIDTH: usize>(
+    witness_rows: &[QueryAnswerPair<F, WIDTH>],
+) -> DenseMatrix<F>
+where
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    let width = num_binding_main_cols::<WIDTH>();
+    let height = witness_rows.len().next_power_of_two().max(1);
+    let mut values = vec![<F as PrimeCharacteristicRing>::ZERO; width * height];
+
+    for (row_idx, pair) in witness_rows.iter().enumerate() {
+        let offset = row_idx * width;
+        let row = &mut values[offset..offset + width];
+        let cols: &mut BindingCols<F, WIDTH> = row.borrow_mut();
+        cols.input = pair.input;
+        cols.output = pair.output;
+        cols.active = <F as PrimeCharacteristicRing>::ONE;
+    }
+
+    DenseMatrix::new(values, width)
+}
+
+fn build_binding_preprocessed_trace<F, const WIDTH: usize>(
+    instance: &PermutationInstanceBuilder<F, WIDTH>,
+    linear_constraints: Option<&LinearConstraintsInstance<F>>,
+) -> DenseMatrix<F>
+where
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    let input_outputs = instance.constraints();
+    let vars_count = instance.allocator().vars_count();
+    let output_count = input_outputs.as_ref().len();
+    let width = num_lookup_cols::<WIDTH>();
+    let height = output_count.next_power_of_two().max(1);
+    let mut values = vec![<F as PrimeCharacteristicRing>::ZERO; width * height];
+
+    let public_multiplicities = public_multiplicities(instance);
+    let linear_multiplicities = linear_constraints.map(lin_multiplicities);
+    let linear_lookup_multiplicities = linear_constraints.map(|constraints| {
+        linear_lookup_multiplicities::<WIDTH>(
+            input_outputs.as_ref(),
+            &lin_multiplicities(constraints),
+        )
+    });
+    let output_multiplicities = output_multiplicities(input_outputs.as_ref(), vars_count);
+    let input_multiplicities = input_multiplicities(input_outputs.as_ref(), vars_count);
+    let linear_inputs = linear_lookup_multiplicities
+        .as_ref()
+        .map(|(input, _)| input.clone())
+        .unwrap_or_else(|| vec![[0; WIDTH]; output_count]);
+    let linear_outputs = linear_lookup_multiplicities
+        .as_ref()
+        .map(|(_, output)| output.clone())
+        .unwrap_or_else(|| vec![[0; WIDTH]; output_count]);
+
+    for (row_idx, pair) in input_outputs.as_ref().iter().enumerate() {
+        let output_mult = output_multiplicities[row_idx];
+        let input_mult = input_multiplicities[row_idx];
+        let linear_input = linear_inputs[row_idx];
+        let linear_output = linear_outputs[row_idx];
+        let offset = row_idx * width;
+        let row = &mut values[offset..offset + width];
+        let lookup: &mut LookupCols<F, WIDTH> = row.borrow_mut();
+        lookup.input_public = pair
+            .input
+            .map(|var| F::from_bool(public_multiplicities[var.0].is_some()));
+        lookup.output_public = pair
+            .output
+            .map(|var| F::from_bool(public_multiplicities[var.0].is_some()));
+        lookup.input_vars = pair.input.map(|var| F::from_usize(var.0));
+        lookup.output_vars = pair.output.map(|var| F::from_usize(var.0));
+        lookup.output_multiplicities = output_mult.map(F::from_usize);
+        lookup.input_multiplicities = input_mult.map(F::from_usize);
+        lookup.input_linear_constraints = match &linear_multiplicities {
+            Some(_) => linear_input.map(F::from_usize),
+            None => core::array::from_fn(|_| <F as PrimeCharacteristicRing>::ZERO),
+        };
+        lookup.output_linear_constraints = match &linear_multiplicities {
+            Some(_) => linear_output.map(F::from_usize),
+            None => core::array::from_fn(|_| <F as PrimeCharacteristicRing>::ZERO),
+        };
+    }
+
+    DenseMatrix::new(values, width)
 }
 
 fn build_public_lookup_table_trace<F, const WIDTH: usize>(
@@ -860,6 +1133,43 @@ where
     }
 
     DenseMatrix::new(values, width)
+}
+
+fn compress_query_answer_pairs<F, const WIDTH: usize>(
+    witness_rows: &[QueryAnswerPair<F, WIDTH>],
+) -> Vec<CountedQueryAnswerPair<F, WIDTH>>
+where
+    F: Field + Unit + PartialEq + Send + Sync,
+{
+    let mut compressed: Vec<CountedQueryAnswerPair<F, WIDTH>> = Vec::new();
+
+    for pair in witness_rows {
+        if let Some(existing) = compressed.iter_mut().find(|row| row.pair == *pair) {
+            existing.multiplicity += 1;
+            continue;
+        }
+        compressed.push(CountedQueryAnswerPair {
+            pair: pair.clone(),
+            multiplicity: 1,
+        });
+    }
+
+    compressed
+}
+
+fn value_lookup_elements<T, U, const WIDTH: usize>(
+    input: &[T; WIDTH],
+    output: &[T; WIDTH],
+) -> Vec<U>
+where
+    T: Clone + Into<U>,
+{
+    input
+        .iter()
+        .cloned()
+        .chain(output.iter().cloned())
+        .map(Into::into)
+        .collect()
 }
 
 fn output_multiplicities<const WIDTH: usize>(
@@ -995,72 +1305,6 @@ fn validate_linear_constraints<const LIN_WIDTH: usize, T, U>(
     }
 }
 
-fn target_len_with_linear<F, const WIDTH: usize>(
-    instance: &PermutationInstanceBuilder<F, WIDTH>,
-) -> usize
-where
-    F: Field + Unit + PartialEq,
-{
-    instance
-        .constraints()
-        .as_ref()
-        .len()
-        .max(instance.public_vars().len())
-        .max(instance.linear_constraints().as_ref().len())
-        .next_power_of_two()
-        .max(1)
-}
-
-fn hash_trace_target_len<H, F, const WIDTH: usize>(
-    hash: &H,
-    instance: &PermutationInstanceBuilder<F, WIDTH>,
-) -> usize
-where
-    H: HashInvocationAir<F, WIDTH>,
-    F: Field + Unit + PartialEq,
-{
-    (instance.constraints().as_ref().len() * hash.trace_rows_per_invocation())
-        .next_power_of_two()
-        .max(1)
-}
-
-fn pad_witness_permutations<F, P, const WIDTH: usize>(
-    instance: &PermutationInstanceBuilder<F, WIDTH>,
-    witness: &PermutationWitnessBuilder<P, WIDTH>,
-    target_len: usize,
-) where
-    F: Field + Unit + PartialEq,
-    P: Permutation<WIDTH, U = F>,
-{
-    let current_len = instance.constraints().as_ref().len();
-    assert!(target_len.is_power_of_two());
-    assert!(current_len <= target_len);
-    let padding = target_len - current_len;
-    if padding == 0 {
-        return;
-    }
-    let zero_input = core::array::from_fn(|_| <F as PrimeCharacteristicRing>::ZERO);
-    for _ in 0..padding {
-        let _ = instance.allocate_permutation(&core::array::from_fn(|_| FieldVar(0)));
-        let _ = witness.allocate_permutation(&zero_input);
-    }
-}
-
-fn pad_instance_permutations<F, const WIDTH: usize>(
-    instance: &PermutationInstanceBuilder<F, WIDTH>,
-    target_len: usize,
-) where
-    F: Field + Unit + PartialEq,
-{
-    let current_len = instance.constraints().as_ref().len();
-    assert!(target_len.is_power_of_two());
-    assert!(current_len <= target_len);
-    let padding = target_len - current_len;
-    for _ in 0..padding {
-        let _ = instance.allocate_permutation(&core::array::from_fn(|_| FieldVar(0)));
-    }
-}
-
 fn pad_dense_matrix_to_height<T: Clone + Default + Send + Sync>(
     mut matrix: DenseMatrix<T>,
     target_height: usize,
@@ -1073,19 +1317,12 @@ fn pad_dense_matrix_to_height<T: Clone + Default + Send + Sync>(
     DenseMatrix::new(matrix.values, width)
 }
 
-fn trace_degree_bits<T: Clone + Send + Sync>(
-    traces: &[DenseMatrix<T>],
-    target_len: usize,
-) -> Vec<usize> {
+fn trace_degree_bits<T: Clone + Send + Sync>(traces: &[DenseMatrix<T>]) -> Vec<usize> {
     traces
         .iter()
-        .enumerate()
-        .map(|(idx, trace)| {
+        .map(|trace| {
             let trace_height = trace.height();
             assert!(trace_height.is_power_of_two());
-            if idx == 0 {
-                assert_eq!(trace_height, target_len);
-            }
             trace_height.trailing_zeros() as usize
         })
         .collect()
@@ -1096,4 +1333,50 @@ fn log_ext_degrees<SC: StarkGenericConfig>(log_degrees: &[usize], config: &SC) -
         .iter()
         .map(|&degree| degree + config.is_zk())
         .collect()
+}
+
+#[cfg(test)]
+mod multiplicity_tests {
+    use super::generate_trace_rows_with_linear;
+    use crate::{
+        poseidon2::{BabyBearPoseidon2Backend, BabyBearPoseidon2_16HashAir, POSEIDON2_16_WIDTH},
+        relation, RelationField,
+    };
+    use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::Matrix;
+    use spongefish_circuit::permutation::{PermutationInstanceBuilder, PermutationWitnessBuilder};
+    use spongefish_poseidon2::BabyBearPoseidon2_16;
+
+    #[test]
+    fn repeated_witness_rows_share_one_hash_trace() {
+        type B = BabyBearPoseidon2Backend;
+
+        let hash = BabyBearPoseidon2_16HashAir::default();
+        let permutation = BabyBearPoseidon2_16::default();
+        let instance = PermutationInstanceBuilder::<RelationField<B>, POSEIDON2_16_WIDTH>::new();
+        let witness = PermutationWitnessBuilder::<_, POSEIDON2_16_WIDTH>::new(permutation);
+        let input = core::array::from_fn(|idx| RelationField::<B>::from_usize(idx + 1));
+
+        for _ in 0..2 {
+            let input_vars = instance.allocator().allocate_vars::<POSEIDON2_16_WIDTH>();
+            let _ = instance.allocate_permutation(&input_vars);
+            let _ = witness.allocate_permutation(&input);
+        }
+
+        let (_airs, traces) =
+            generate_trace_rows_with_linear::<_, RelationField<B>, _, POSEIDON2_16_WIDTH, 1>(
+                &hash, &instance, &witness,
+            );
+
+        assert_eq!(traces[0].height(), 1);
+        assert_eq!(traces[2].height(), 2);
+
+        let backend = B::default();
+        let proof =
+            relation::prove::<B, _, _, POSEIDON2_16_WIDTH, 1>(&backend, &hash, &instance, &witness);
+        assert!(relation::verify::<B, _, POSEIDON2_16_WIDTH, 1>(
+            &backend, &hash, &instance, &proof
+        )
+        .is_ok());
+    }
 }

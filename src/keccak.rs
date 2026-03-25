@@ -6,7 +6,6 @@ use p3_field::{Field, PrimeField64};
 use p3_keccak_air::{KeccakAir, KeccakCols, NUM_ROUNDS};
 use p3_matrix::dense::RowMajorMatrix;
 use spongefish::{Permutation, Unit};
-use spongefish_circuit::permutation::PermutationWitnessBuilder;
 
 use crate::{HashInvocationAir, QueryAnswerPair};
 
@@ -86,17 +85,12 @@ where
         row
     }
 
-    fn build_trace<P>(
+    fn build_trace(
         &self,
-        witness: &PermutationWitnessBuilder<P, KECCAK_WIDTH>,
+        witness_rows: &[QueryAnswerPair<F, KECCAK_WIDTH>],
         extra_capacity_bits: usize,
-    ) -> RowMajorMatrix<F>
-    where
-        P: Permutation<KECCAK_WIDTH, U = F>,
-    {
-        let inputs = witness
-            .trace()
-            .as_ref()
+    ) -> RowMajorMatrix<F> {
+        let inputs = witness_rows
             .iter()
             .map(|pair| pack_keccak_input(&pair.input))
             .collect::<Vec<_>>();

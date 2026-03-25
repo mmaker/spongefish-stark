@@ -6,8 +6,6 @@ use p3_air::AirBuilder;
 use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::{StarkGenericConfig, Val};
-use spongefish::Permutation;
-use spongefish_circuit::permutation::PermutationWitnessBuilder;
 
 #[cfg(feature = "keccak")]
 pub mod keccak;
@@ -54,13 +52,11 @@ pub trait HashInvocationAir<F, const WIDTH: usize>: Clone {
     fn row_frame<'a, Var>(&self, row: &'a [Var]) -> Self::Frame<'a, Var>;
 
     /// Build a concrete main trace from a witness trace of logical invocations.
-    fn build_trace<P>(
+    fn build_trace(
         &self,
-        witness: &PermutationWitnessBuilder<P, WIDTH>,
+        witness_rows: &[QueryAnswerPair<F, WIDTH>],
         extra_capacity_bits: usize,
-    ) -> RowMajorMatrix<F>
-    where
-        P: Permutation<WIDTH, U = F>;
+    ) -> RowMajorMatrix<F>;
 
     /// Project one backend-specific invocation frame into its logical input and
     /// output expressions.

@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use core::{borrow::Borrow, marker::PhantomData};
 
+use crate::{HashInvocationAir, QueryAnswerPair, StarkRelationBackend};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::{
     default_babybear_poseidon2_16, BabyBear, GenericPoseidon2LinearLayersBabyBear,
@@ -21,10 +22,6 @@ use p3_poseidon2_air::{Poseidon2Air, Poseidon2Cols, RoundConstants};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{StarkConfig, StarkGenericConfig};
 use rand::{rngs::SmallRng, SeedableRng};
-use spongefish::Permutation;
-use spongefish_circuit::permutation::PermutationWitnessBuilder;
-
-use crate::{HashInvocationAir, QueryAnswerPair, StarkRelationBackend};
 
 pub const POSEIDON2_16_WIDTH: usize = 16;
 pub const POSEIDON2_16_HALF_FULL_ROUNDS: usize = 4;
@@ -370,17 +367,12 @@ where
         row
     }
 
-    fn build_trace<P>(
+    fn build_trace(
         &self,
-        witness: &PermutationWitnessBuilder<P, POSEIDON2_16_WIDTH>,
+        witness_rows: &[QueryAnswerPair<C::F, POSEIDON2_16_WIDTH>],
         extra_capacity_bits: usize,
-    ) -> RowMajorMatrix<C::F>
-    where
-        P: Permutation<POSEIDON2_16_WIDTH, U = C::F>,
-    {
-        let inputs = witness
-            .trace()
-            .as_ref()
+    ) -> RowMajorMatrix<C::F> {
+        let inputs = witness_rows
             .iter()
             .map(|pair| pair.input)
             .collect::<Vec<_>>();
