@@ -19,6 +19,7 @@ use spongefish_circuit::{
 };
 
 const TEST_LINEAR_WIDTH: usize = 1;
+const TEST_LINEAR_WIDTH_2: usize = 2;
 
 #[cfg(feature = "keccak")]
 type RelationCase<B, const WIDTH: usize> =
@@ -465,6 +466,134 @@ fn poseidon2_16_relation_proof_and_false_checks() {
         &KoalaBearPoseidon2Backend::default(),
         &KoalaBearPoseidon2_16HashAir::default(),
         KoalaBearPoseidon2_16::default(),
+    );
+}
+
+#[test]
+fn poseidon2_16_relation_proof_and_false_checks_lw2() {
+    run_hash_relation_checks::<
+        BabyBearPoseidon2Backend,
+        BabyBearPoseidon2_16HashAir,
+        BabyBearPoseidon2_16,
+        POSEIDON2_16_WIDTH,
+        TEST_LINEAR_WIDTH_2,
+    >(
+        &BabyBearPoseidon2Backend::default(),
+        &BabyBearPoseidon2_16HashAir::default(),
+        BabyBearPoseidon2_16::default(),
+    );
+}
+
+#[test]
+fn poseidon2_16_relation_proof_without_linear_equations_lw2() {
+    type B = BabyBearPoseidon2Backend;
+
+    let backend = B::default();
+    let hash = BabyBearPoseidon2_16HashAir::default();
+    let permutation = BabyBearPoseidon2_16::default();
+    let input = sample_input::<RelationField<B>, POSEIDON2_16_WIDTH>();
+    let expected_output = permutation.permute(&input);
+    let public_outputs = Vec::from([
+        (1usize, expected_output[1]),
+        (2usize, expected_output[2]),
+        (3usize, expected_output[3]),
+    ]);
+
+    let instance = PermutationInstanceBuilder::<RelationField<B>, POSEIDON2_16_WIDTH>::new();
+    let witness = PermutationWitnessBuilder::<BabyBearPoseidon2_16, POSEIDON2_16_WIDTH>::new(
+        permutation,
+    );
+
+    let input_vars = instance
+        .allocator()
+        .allocate_public::<POSEIDON2_16_WIDTH>(&input);
+    let output_vars = instance.allocate_permutation(&input_vars);
+    let _output_vals = witness.allocate_permutation(&input);
+
+    instance.allocator().set_public_vars(
+        public_outputs.iter().map(|(idx, _)| output_vars[*idx]),
+        public_outputs.iter().map(|(_, val)| *val),
+    );
+
+    let proof = relation::prove::<B, _, _, POSEIDON2_16_WIDTH, TEST_LINEAR_WIDTH_2>(
+        &backend, &hash, &instance, &witness,
+    );
+    assert!(
+        relation::verify::<B, _, POSEIDON2_16_WIDTH, TEST_LINEAR_WIDTH_2>(
+            &backend, &hash, &instance, &proof
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn poseidon2_16_relation_proof_with_two_nonzero_linear_terms_lw2() {
+    type B = BabyBearPoseidon2Backend;
+
+    let backend = B::default();
+    let hash = BabyBearPoseidon2_16HashAir::default();
+    let permutation = BabyBearPoseidon2_16::default();
+    let input = sample_input::<RelationField<B>, POSEIDON2_16_WIDTH>();
+    let expected_output = permutation.permute(&input);
+    let public_outputs = Vec::from([
+        (1usize, expected_output[1]),
+        (2usize, expected_output[2]),
+        (3usize, expected_output[3]),
+    ]);
+
+    let instance = PermutationInstanceBuilder::<RelationField<B>, POSEIDON2_16_WIDTH>::new();
+    let witness = PermutationWitnessBuilder::<BabyBearPoseidon2_16, POSEIDON2_16_WIDTH>::new(
+        permutation,
+    );
+
+    let input_vars = instance
+        .allocator()
+        .allocate_public::<POSEIDON2_16_WIDTH>(&input);
+    let output_vars = instance.allocate_permutation(&input_vars);
+    let output_vals = witness.allocate_permutation(&input);
+
+    instance.allocator().set_public_vars(
+        public_outputs.iter().map(|(idx, _)| output_vars[*idx]),
+        public_outputs.iter().map(|(_, val)| *val),
+    );
+
+    let image =
+        output_vals[0] + <RelationField<B> as PrimeCharacteristicRing>::from_u8(7) * output_vals[1];
+    instance.add_equation(LinearEquation::new(
+        [
+            (
+                <RelationField<B> as PrimeCharacteristicRing>::ONE,
+                output_vars[0],
+            ),
+            (
+                <RelationField<B> as PrimeCharacteristicRing>::from_u8(7),
+                output_vars[1],
+            ),
+        ],
+        image,
+    ));
+    witness.add_equation(LinearEquation::new(
+        [
+            (
+                <RelationField<B> as PrimeCharacteristicRing>::ONE,
+                output_vals[0],
+            ),
+            (
+                <RelationField<B> as PrimeCharacteristicRing>::from_u8(7),
+                output_vals[1],
+            ),
+        ],
+        image,
+    ));
+
+    let proof = relation::prove::<B, _, _, POSEIDON2_16_WIDTH, TEST_LINEAR_WIDTH_2>(
+        &backend, &hash, &instance, &witness,
+    );
+    assert!(
+        relation::verify::<B, _, POSEIDON2_16_WIDTH, TEST_LINEAR_WIDTH_2>(
+            &backend, &hash, &instance, &proof
+        )
+        .is_ok()
     );
 }
 
